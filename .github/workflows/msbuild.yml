@@ -26,7 +26,7 @@ jobs:
           
     - name: Install dependencies on windows
       run: |
-          choco install ninja cmake gstreamer gstreamer-devel --no-progres
+          choco install --no-progres ninja cmake gstreamer gstreamer-devel 
           RefreshEnv.cmd
           ninja --version
           cmake --version
