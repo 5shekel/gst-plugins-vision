@@ -16,9 +16,10 @@ jobs:
           
     - name: Install dependencies on windows
       run: |
-          choco install ninja cmake gstreamer gstreamer-devel
+          choco install ninja cmake gstreamer gstreamer-devel --no-progress
           ninja --version
           cmake --version
+          gst-launch-1.0.exe --version
     
     - run: echo "GSTREAMER_1_0_ROOT_X86_64=C:\gstreamer\1.0\msvc_x86_64\" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
     
