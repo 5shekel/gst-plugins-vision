@@ -28,12 +28,14 @@ jobs:
       run: |
           choco install ninja cmake gstreamer gstreamer-devel --no-progres 
           ninja --version
-          cmake --version
+          cmake --version    
     
-    - run: $GSTREAMER_1_0_ROOT_X86_64 = "C:\gstreamer\1.0\msvc_x86_64\" 
-    - run: $GSTREAMER_1_0_ROOT_MSVC_X86_64 = "C:\gstreamer\1.0\msvc_x86_64\" 
-    - run: $GSTREAMER_ROOT = "C:\gstreamer\1.0\msvc_x86_64\" 
-    - run: $env:Path = "C:\gstreamer\1.0\msvc_x86_64\bin;C:\gstreamer\1.0\msvc_x86_64\lib;$env:Path"
+    - name: add to env
+    - run: $env:GITHUB_ENV="GSTREAMER_1_0_ROOT_X86_64=C:\gstreamer\1.0\msvc_x86_64\"
+    - run: $env:GITHUB_ENV="GSTREAMER_1_0_ROOT_MSVC_X86_64=C:\gstreamer\1.0\msvc_x86_64\"
+    - run: $env:GITHUB_ENV="GSTREAMER_ROOT=C:\gstreamer\1.0\msvc_x86_64\"
+		#- run: echo "C:\gstreamer\1.0\msvc_x86_64\bin;C:\gstreamer\1.0\msvc_x86_64\lib;" 	>> $env:GITHUB_PATH
+    
 
     - name: get ENV vars
       run: |
