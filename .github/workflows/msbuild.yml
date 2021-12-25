@@ -26,17 +26,14 @@ jobs:
           
     - name: Install dependencies on windows
       run: |
-          choco install ninja cmake --no-progres
-          choco install gstreamer --no-progres  
-          choco install gstreamer-devel --no-progres 
+          choco install ninja cmake gstreamer gstreamer-devel --no-progres 
           ninja --version
           cmake --version
-          $Env:path
     
-    - run: $env:GSTREAMER_1_0_ROOT_X86_64 = "C:\gstreamer\1.0\msvc_x86_64\" 
-    - run: $env:GSTREAMER_1_0_ROOT_MSVC_X86_64 = "C:\gstreamer\1.0\msvc_x86_64\" 
-    - run: $env:GSTREAMER_ROOT = "C:\gstreamer\1.0\msvc_x86_64\" 
-    - run: $env:Path = "C:\gstreamer\1.0\msvc_x86_64\bin;C:\gstreamer\1.0\msvc_x86_64\lib;$env:Path"
+    - run: GSTREAMER_1_0_ROOT_X86_64 = "C:\gstreamer\1.0\msvc_x86_64\" 
+    - run: GSTREAMER_1_0_ROOT_MSVC_X86_64 = "C:\gstreamer\1.0\msvc_x86_64\" 
+    - run: GSTREAMER_ROOT = "C:\gstreamer\1.0\msvc_x86_64\" 
+    - run: Path = "C:\gstreamer\1.0\msvc_x86_64\bin;C:\gstreamer\1.0\msvc_x86_64\lib;$env:Path"
 
     - name: get ENV vars
       run:  printenv
