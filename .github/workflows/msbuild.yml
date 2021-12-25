@@ -1,7 +1,17 @@
 name: Windows
 
 on: 
-  workflow_dispatch
+  push:
+    branches: [ master ]
+    paths-ignore:
+    - 'README.md'
+    - '**.yml'
+  pull_request:
+    branches: [ master ]
+    paths-ignore:
+    - 'README.md'
+    - '**.yml'
+workflow_dispatch
 
 env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
@@ -16,7 +26,8 @@ jobs:
           
     - name: Install dependencies on windows
       run: |
-          choco install ninja cmake gstreamer gstreamer-devel --no-progress
+          choco install ninja cmake gstreamer gstreamer-devel --no-progres
+          RefreshEnv.cmd
           ninja --version
           cmake --version
           gst-launch-1.0.exe --version
