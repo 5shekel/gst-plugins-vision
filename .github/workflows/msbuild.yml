@@ -33,9 +33,9 @@ jobs:
           cmake --version
           $Env:path
     
-    - run: echo "GSTREAMER_1_0_ROOT_X86_64=C:\gstreamer\1.0\msvc_x86_64\" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
-    - run: echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=C:\gstreamer\1.0\msvc_x86_64\" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
-    - run: echo "GSTREAMER_ROOT=C:\gstreamer\1.0\msvc_x86_64\" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf-8 -Append
+    - run: $env:GSTREAMER_1_0_ROOT_X86_64 = "C:\gstreamer\1.0\msvc_x86_64\" 
+    - run: $env:GSTREAMER_1_0_ROOT_MSVC_X86_64 = "C:\gstreamer\1.0\msvc_x86_64\" 
+    - run: $env:GSTREAMER_ROOT = "C:\gstreamer\1.0\msvc_x86_64\" 
     - run: $env:Path = "C:\gstreamer\1.0\msvc_x86_64\bin;C:\gstreamer\1.0\msvc_x86_64\lib;$env:Path"
 
     - name: get ENV vars
