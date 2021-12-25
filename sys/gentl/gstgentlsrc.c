@@ -42,6 +42,7 @@
 #include <gst/video/video.h>
 
 #include "genicampixelformat.h"
+#include "get_unix_ns.h"
 
 #include "unzip.h"
 
@@ -56,24 +57,61 @@
 // "C:\\BitFlow SDK 6.20\\Bin64\\BFGTL.cti";
 // "C:\\Program Files\\Basler\\pylon 5\\Runtime\\x64\\ProducerGEV.cti";
 
-// EVT
-#define GENAPI_WIDTH 0xA000
-#define GENAPI_HEIGHT 0xA004
-#define GENAPI_PIXFMT 0xA008
-#define GENAPI_PAYLOAD_SIZE 0xD008
-#define GENAPI_ACQMODE 0xB000
-#define GENAPI_ACQSTART 0xB004
-#define GENAPI_ACQSTOP 0xB008
-#define CTI_PATH "C:\\Program Files\\EVT\\eSDK\\bin\\EmergentGenTL.cti"
+static void
+initialize_evt_addresses (GstGenTlProducer * producer)
+{
+  memset (producer, 0, sizeof (producer));
+  producer->cti_path =
+      g_strdup ("C:\\Program Files\\EVT\\eSDK\\bin\\EmergentGenTL.cti");
+  producer->acquisition_mode_value = 0;
+  producer->width = 0xA000;
+  producer->height = 0xA004;
+  producer->pixel_format = 0xA008;
+  producer->payload_size = 0xD008;
+  producer->acquisition_mode = 0xB000;
+  producer->acquisition_start = 0xB004;
+  producer->acquisition_stop = 0xB008;
+  producer->tick_frequency_low = 0x0940;
+  producer->tick_frequency_high = 0x093C;
+  producer->timestamp_control_latch = 0x944;
+  producer->timestamp_low = 0x094C;
+  producer->timestamp_high = 0x0948;
+}
 
-// Basler
-//#define GENAPI_WIDTH 0x30204
-//#define GENAPI_HEIGHT 0x30224
-//#define GENAPI_PAYLOAD_SIZE 0x10088
-//#define GENAPI_ACQMODE 0x40004
-//#define GENAPI_ACQSTART 0x40024
-//#define GENAPI_ACQSTOP 0x40044
-//#define CTI_PATH "C:\\Program Files\\Basler\\pylon 6\\Runtime\\x64\\ProducerGEV.cti"
+static void
+initialize_basler_addresses (GstGenTlProducer * producer)
+{
+  memset (producer, 0, sizeof (producer));
+  producer->cti_path =
+      g_strdup
+      ("C:\\Program Files\\Basler\\pylon 5\\Runtime\\x64\\ProducerGEV.cti");
+  producer->acquisition_mode_value = 2;
+  producer->width = 0x30204;
+  producer->height = 0x30224;
+  producer->pixel_format = 0x30024;
+  producer->payload_size = 0x10088;
+  producer->acquisition_mode = 0x40004;
+  producer->acquisition_start = 0x40024;
+  producer->acquisition_stop = 0x40044;
+}
+
+#define GST_TYPE_GENTLSRC_PRODUCER (gst_gentlsrc_producer_get_type())
+static GType
+gst_gentlsrc_producer_get_type (void)
+{
+  static GType gentlsrc_producer_type = 0;
+  static const GEnumValue gentlsrc_producer[] = {
+    {GST_GENTLSRC_PRODUCER_BASLER, "Basler producer", "basler"},
+    {GST_GENTLSRC_PRODUCER_EVT, "EVT producer", "evt"},
+    {0, NULL, NULL},
+  };
+
+  if (!gentlsrc_producer_type) {
+    gentlsrc_producer_type =
+        g_enum_register_static ("GstGenTlSrcProducer", gentlsrc_producer);
+  }
+  return gentlsrc_producer_type;
+}
 
 GST_DEBUG_CATEGORY_STATIC (gst_gentlsrc_debug);
 #define GST_CAT_DEFAULT gst_gentlsrc_debug
@@ -96,10 +134,12 @@ static gboolean gst_gentlsrc_unlock_stop (GstBaseSrc * src);
 static GstFlowReturn gst_gentlsrc_create (GstPushSrc * src, GstBuffer ** buf);
 
 static gchar *gst_gentlsrc_get_error_string (GstGenTlSrc * src);
+static void gst_gentlsrc_cleanup_tl (GstGenTlSrc * src);
 
 enum
 {
   PROP_0,
+  PROP_PRODUCER,
   PROP_INTERFACE_INDEX,
   PROP_INTERFACE_ID,
   PROP_DEVICE_INDEX,
@@ -107,9 +147,11 @@ enum
   PROP_STREAM_INDEX,
   PROP_STREAM_ID,
   PROP_NUM_CAPTURE_BUFFERS,
-  PROP_TIMEOUT
+  PROP_TIMEOUT,
+  PROP_ATTRIBUTES
 };
 
+#define DEFAULT_PROP_PRODUCER GST_GENTLSRC_PRODUCER_BASLER
 #define DEFAULT_PROP_INTERFACE_INDEX 0
 #define DEFAULT_PROP_INTERFACE_ID ""
 #define DEFAULT_PROP_DEVICE_INDEX 0
@@ -118,6 +160,7 @@ enum
 #define DEFAULT_PROP_STREAM_ID ""
 #define DEFAULT_PROP_NUM_CAPTURE_BUFFERS 3
 #define DEFAULT_PROP_TIMEOUT 1000
+#define DEFAULT_PROP_ATTRIBUTES ""
 
 /* pad templates */
 
@@ -136,6 +179,13 @@ static GstStaticPadTemplate gst_gentlsrc_src_template =
 #define HANDLE_GTL_ERROR(arg)  \
   if (ret != GC_ERR_SUCCESS) {  \
     GST_ELEMENT_ERROR (src, LIBRARY, FAILED,  \
+      (arg ": %s", gst_gentlsrc_get_error_string (src)), (NULL));  \
+    goto error; \
+  }
+
+#define HANDLE_GTL_WARNING(arg)  \
+  if (ret != GC_ERR_SUCCESS) {  \
+    GST_ELEMENT_WARNING (src, LIBRARY, FAILED,  \
       (arg ": %s", gst_gentlsrc_get_error_string (src)), (NULL));  \
     goto error; \
   }
@@ -197,7 +247,7 @@ gboolean
 gst_gentlsrc_bind_functions (GstGenTlSrc * src)
 {
   GModule *module;
-  const char cti_path[] = CTI_PATH;
+  const char *cti_path = src->producer.cti_path;
   gboolean ret = TRUE;
 
   GST_DEBUG_OBJECT (src, "Trying to bind functions from '%s'", cti_path);
@@ -302,6 +352,12 @@ gst_gentlsrc_class_init (GstGenTlSrcClass * klass)
   gstpushsrc_class->create = GST_DEBUG_FUNCPTR (gst_gentlsrc_create);
 
   /* Install GObject properties */
+  g_object_class_install_property (gobject_class, PROP_PRODUCER,
+      g_param_spec_enum ("producer", "Producer", "GenTL producer",
+          GST_TYPE_GENTLSRC_PRODUCER, DEFAULT_PROP_PRODUCER,
+          G_PARAM_STATIC_STRINGS | G_PARAM_READWRITE |
+          GST_PARAM_MUTABLE_PLAYING));
+
   g_object_class_install_property (gobject_class, PROP_INTERFACE_INDEX,
       g_param_spec_uint ("interface-index", "Interface index",
           "Interface index number, zero-based, overridden by interface-id",
@@ -348,12 +404,22 @@ gst_gentlsrc_class_init (GstGenTlSrcClass * klass)
           "Timeout (ms)",
           "Timeout in ms (0 to use default)", 0, G_MAXINT,
           DEFAULT_PROP_TIMEOUT, G_PARAM_STATIC_STRINGS | G_PARAM_READWRITE));
+  g_object_class_install_property (G_OBJECT_CLASS (klass),
+      PROP_ATTRIBUTES, g_param_spec_string ("attributes",
+          "Attributes", "Attributes to change, comma separated key=value pairs",
+          DEFAULT_PROP_ATTRIBUTES, G_PARAM_STATIC_STRINGS | G_PARAM_READWRITE));
 
+  klass->hTL = NULL;
+  g_mutex_init (&klass->tl_mutex);
+  klass->tl_refcount = 0;
 }
 
 static void
 gst_gentlsrc_reset (GstGenTlSrc * src)
 {
+  src->gentl_latched_ticks = 0;
+  src->unix_latched_time = 0;
+
   src->error_string[0] = 0;
   src->last_frame_count = 0;
   src->total_dropped_frames = 0;
@@ -374,10 +440,12 @@ gst_gentlsrc_init (GstGenTlSrc * src)
   gst_base_src_set_format (GST_BASE_SRC (src), GST_FORMAT_TIME);
 
   /* initialize member variables */
+  src->producer_prop = DEFAULT_PROP_PRODUCER;
   src->interface_index = DEFAULT_PROP_INTERFACE_INDEX;
   src->interface_id = g_strdup (DEFAULT_PROP_INTERFACE_ID);
   src->num_capture_buffers = DEFAULT_PROP_NUM_CAPTURE_BUFFERS;
   src->timeout = DEFAULT_PROP_TIMEOUT;
+  src->attributes = g_strdup (DEFAULT_PROP_ATTRIBUTES);
 
   src->stop_requested = FALSE;
   src->caps = NULL;
@@ -399,6 +467,9 @@ gst_gentlsrc_set_property (GObject * object, guint property_id,
   src = GST_GENTL_SRC (object);
 
   switch (property_id) {
+    case PROP_PRODUCER:
+      src->producer_prop = g_value_get_enum (value);
+      break;
     case PROP_INTERFACE_INDEX:
       src->interface_index = g_value_get_uint (value);
       break;
@@ -426,6 +497,11 @@ gst_gentlsrc_set_property (GObject * object, guint property_id,
     case PROP_TIMEOUT:
       src->timeout = g_value_get_int (value);
       break;
+    case PROP_ATTRIBUTES:
+      if (src->attributes)
+        g_free (src->attributes);
+      src->attributes = g_strdup (g_value_get_string (value));
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -442,6 +518,9 @@ gst_gentlsrc_get_property (GObject * object, guint property_id,
   src = GST_GENTL_SRC (object);
 
   switch (property_id) {
+    case PROP_PRODUCER:
+      g_value_set_enum (value, src->producer_prop);
+      break;
     case PROP_INTERFACE_INDEX:
       g_value_set_uint (value, src->interface_index);
       break;
@@ -465,6 +544,9 @@ gst_gentlsrc_get_property (GObject * object, guint property_id,
       break;
     case PROP_TIMEOUT:
       g_value_set_int (value, src->timeout);
+      break;
+    case PROP_ATTRIBUTES:
+      g_value_set_string (value, src->attributes);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -718,7 +800,9 @@ gst_gentlsrc_get_payload_size (GstGenTlSrc * src)
     guint32 val = 0;
     size_t datasize = 4;
     // TODO: use node map
-    ret = GTL_GCReadPort (src->hDevPort, GENAPI_PAYLOAD_SIZE, &val, &datasize);
+    ret =
+        GTL_GCReadPort (src->hDevPort, src->producer.payload_size, &val,
+        &datasize);
     HANDLE_GTL_ERROR ("Failed to get payload size");
     payload_size = GUINT32_FROM_BE (val);
     GST_DEBUG_OBJECT (src, "Payload size defined by node map: %d",
@@ -771,52 +855,182 @@ error:
   return FALSE;
 }
 
-static gboolean
-gst_gentlsrc_start (GstBaseSrc * bsrc)
+static guint64
+gst_gentlsrc_get_gev_tick_frequency (GstGenTlSrc * src)
 {
-  GstGenTlSrc *src = GST_GENTL_SRC (bsrc);
   GC_ERROR ret;
-  uint32_t i, num_ifaces, num_devs;
-  guint32 width, height, stride;
-  GstVideoInfo vinfo;
 
-  GST_DEBUG_OBJECT (src, "start");
+  if (!src->producer.tick_frequency_high || !src->producer.tick_frequency_low)
+    return 0;
 
-  /* bind functions from CTI */
-  /* TODO: Enumerate CTI files in env var GENTL_GENTL64_PATH */
-  if (!gst_gentlsrc_bind_functions (src)) {
-    GST_ELEMENT_ERROR (src, LIBRARY, INIT,
-        ("GenTL CTI could not be opened: %s", g_module_error ()), (NULL));
-    return FALSE;
-  }
+  guint32 freq_low, freq_high;
+  size_t datasize = 4;
+  ret = GTL_GCReadPort (src->hDevPort, src->producer.tick_frequency_low, &freq_low, &datasize); // GevTimestampTickFrequencyLow
+  HANDLE_GTL_ERROR ("Failed to get GevTimestampTickFrequencyLow");
+  ret = GTL_GCReadPort (src->hDevPort, src->producer.tick_frequency_high, &freq_high, &datasize);       // GevTimestampTickFrequencyHigh
+  HANDLE_GTL_ERROR ("Failed to get GevTimestampTickFrequencyHigh");
 
-  /* initialize library and print info */
-  ret = GTL_GCInitLib ();
-  HANDLE_GTL_ERROR ("GenTL Producer library could not be initialized");
+  guint64 tick_frequency =
+      GUINT64_FROM_BE ((guint64) freq_low << 32 | freq_high);
+  GST_DEBUG_OBJECT (src, "GEV Timestamp tick frequency is %llu",
+      tick_frequency);
 
-  gst_gentl_print_gentl_impl_info (src);
+  return tick_frequency;
 
-  /* open GenTL, print info, and update interface list */
-  ret = GTL_TLOpen (&src->hTL);
-  HANDLE_GTL_ERROR ("System module failed to open");
+error:
+  return 0;
+}
 
-  gst_gentl_print_system_info (src);
+static guint64
+gst_gentlsrc_get_gev_timestamp_ticks (GstGenTlSrc * src)
+{
+  GC_ERROR ret;
+  size_t datasize = 4;
+  guint32 val, ts_low, ts_high;
 
-  ret = GTL_TLUpdateInterfaceList (src->hTL, NULL, src->timeout);
-  HANDLE_GTL_ERROR ("Failed to update interface list within timeout");
+  val = GUINT32_TO_BE (2);
+  datasize = sizeof (val);
+  ret = GTL_GCWritePort (src->hDevPort, src->producer.timestamp_control_latch, &val, &datasize);        // GevTimestampControlLatch
+  HANDLE_GTL_WARNING ("Failed to latch timestamp GevTimestampControlLatch");
 
-  /* print info for all interfaces and open specified interface */
-  ret = GTL_TLGetNumInterfaces (src->hTL, &num_ifaces);
-  HANDLE_GTL_ERROR ("Failed to get number of interfaces");
-  if (num_ifaces > 0) {
-    GST_DEBUG_OBJECT (src, "Found %d GenTL interfaces", num_ifaces);
-    for (i = 0; i < num_ifaces; ++i) {
-      gst_gentl_print_interface_info (src, i);
-    }
+  ret = GTL_GCReadPort (src->hDevPort, src->producer.timestamp_low, &ts_low, &datasize);        // GevTimestampValueLow
+  HANDLE_GTL_WARNING ("Failed to get GevTimestampValueLow");
+  ret = GTL_GCReadPort (src->hDevPort, src->producer.timestamp_high, &ts_high, &datasize);      // GevTimestampValueHigh
+  HANDLE_GTL_WARNING ("Failed to get GevTimestampValueHigh");
+  guint64 ticks = GUINT64_FROM_BE ((guint64) ts_low << 32 | ts_high);
+  GST_LOG_OBJECT (src, "Timestamp ticks are %llu", ticks);
+
+  return ticks;
+
+error:
+  return 0;
+}
+
+static void
+gst_gentlsrc_src_latch_timestamps (GstGenTlSrc * src)
+{
+  guint64 unix_ts, gev_ts;
+
+  unix_ts = get_unix_ns ();
+  gev_ts = gst_gentlsrc_get_gev_timestamp_ticks (src);
+
+  if (gev_ts != 0) {
+    src->unix_latched_time = unix_ts;
+    src->gentl_latched_ticks = gev_ts;
   } else {
-    GST_ELEMENT_ERROR (src, LIBRARY, FAILED, ("No interfaces found"), (NULL));
-    goto error;
+    GST_WARNING_OBJECT (src, "Failed to latch GEV time, using old latch value");
   }
+}
+
+static void
+gst_gentlsrc_set_attributes (GstGenTlSrc * src)
+{
+  gchar **pairs;
+  int i;
+  guint32 val;
+  size_t datasize;
+  GC_ERROR ret;
+
+  if (!src->attributes || src->attributes == 0) {
+    return;
+  }
+
+  GST_DEBUG_OBJECT (src, "Trying to set following attributes: '%s'",
+      src->attributes);
+
+  pairs = g_strsplit (src->attributes, ";", 0);
+
+  for (i = 0;; i++) {
+    gchar **pair;
+
+    if (!pairs[i])
+      break;
+
+    pair = g_strsplit (pairs[i], "=", 2);
+
+    if (!pair[0] || !pair[1]) {
+      GST_WARNING_OBJECT (src, "Failed to parse attribute/value: '%s'", pair);
+      continue;
+    }
+
+    GST_DEBUG_OBJECT (src, "Setting attribute, '%s'='%s'", pair[0], pair[1]);
+
+    val = GUINT32_TO_BE (atoi (pair[1]));
+    datasize = sizeof (val);
+    ret =
+        GTL_GCWritePort (src->hDevPort, strtol (pair[0], NULL, 16), &val,
+        &datasize);
+    if (ret != GC_ERR_SUCCESS) {
+      GST_WARNING_OBJECT (src, "Failed to set attribute: %s",
+          gst_gentlsrc_get_error_string (src));
+    }
+    g_strfreev (pair);
+  }
+  g_strfreev (pairs);
+
+  if (src->attributes) {
+    g_free (src->attributes);
+    src->attributes = NULL;
+  }
+}
+
+static gboolean
+gst_gentlsrc_open_tl (GstGenTlSrc * src)
+{
+  GstGenTlSrcClass *klass = GST_GENTL_SRC_GET_CLASS (src);
+  GC_ERROR ret;
+  uint32_t i, num_ifaces;
+
+  /* open framegrabber if it isn't already opened */
+  if (klass->tl_refcount > 0) {
+    GST_DEBUG_OBJECT (src,
+        "Framegrabber interface already opened in this process, reusing");
+    src->hTL = klass->hTL;
+    klass->tl_refcount++;
+  } else {
+    /* initialize library and print info */
+    ret = GTL_GCInitLib ();
+    //HANDLE_GTL_ERROR ("GenTL Producer library could not be initialized");
+
+    gst_gentl_print_gentl_impl_info (src);
+
+    /* open GenTL, print info, and update interface list */
+    ret = GTL_TLOpen (&src->hTL);
+    HANDLE_GTL_ERROR ("System module failed to open");
+
+    gst_gentl_print_system_info (src);
+
+    ret = GTL_TLUpdateInterfaceList (src->hTL, NULL, src->timeout);
+    HANDLE_GTL_ERROR ("Failed to update interface list within timeout");
+
+    /* print info for all interfaces and open specified interface */
+    ret = GTL_TLGetNumInterfaces (src->hTL, &num_ifaces);
+    HANDLE_GTL_ERROR ("Failed to get number of interfaces");
+    if (num_ifaces > 0) {
+      GST_DEBUG_OBJECT (src, "Found %d GenTL interfaces", num_ifaces);
+      for (i = 0; i < num_ifaces; ++i) {
+        gst_gentl_print_interface_info (src, i);
+      }
+    } else {
+      GST_ELEMENT_ERROR (src, LIBRARY, FAILED, ("No interfaces found"), (NULL));
+      goto error;
+    }
+
+    klass->hTL = src->hTL;
+    klass->tl_refcount++;
+  }
+
+  return TRUE;
+
+error:
+  return FALSE;
+}
+
+static gboolean
+gst_gentlsrc_open_interface (GstGenTlSrc * src)
+{
+  GstGenTlSrcClass *klass = GST_GENTL_SRC_GET_CLASS (src);
+  GC_ERROR ret;
 
   if (!src->interface_id || src->interface_id[0] == 0) {
     size_t id_size;
@@ -838,6 +1052,54 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
   GST_DEBUG_OBJECT (src, "Trying to open interface '%s'", src->interface_id);
   ret = GTL_TLOpenInterface (src->hTL, src->interface_id, &src->hIF);
   HANDLE_GTL_ERROR ("Interface module failed to open");
+
+  return TRUE;
+
+error:
+  return FALSE;
+}
+
+static gboolean
+gst_gentlsrc_start (GstBaseSrc * bsrc)
+{
+  GstGenTlSrc *src = GST_GENTL_SRC (bsrc);
+  GstGenTlSrcClass *klass = GST_GENTL_SRC_GET_CLASS (src);
+  GC_ERROR ret;
+  uint32_t i, num_devs;
+  guint32 width, height, stride;
+  GstVideoInfo vinfo;
+
+  GST_DEBUG_OBJECT (src, "start");
+
+  if (src->producer_prop == GST_GENTLSRC_PRODUCER_BASLER) {
+    initialize_basler_addresses (&src->producer);
+  } else if (src->producer_prop == GST_GENTLSRC_PRODUCER_EVT) {
+    initialize_evt_addresses (&src->producer);
+  } else {
+    g_assert_not_reached ();
+  }
+
+  /* bind functions from CTI */
+  /* TODO: Enumerate CTI files in env var GENTL_GENTL64_PATH */
+  if (!gst_gentlsrc_bind_functions (src)) {
+    GST_ELEMENT_ERROR (src, LIBRARY, INIT,
+        ("GenTL CTI could not be opened: %s", g_module_error ()), (NULL));
+    return FALSE;
+  }
+
+  g_mutex_lock (&klass->tl_mutex);
+
+  if (!gst_gentlsrc_open_tl (src)) {
+    g_mutex_unlock (&klass->tl_mutex);
+    goto error;
+  }
+
+  if (!gst_gentlsrc_open_interface (src)) {
+    g_mutex_unlock (&klass->tl_mutex);
+    goto error;
+  }
+
+  g_mutex_unlock (&klass->tl_mutex);
 
   ret = GTL_IFUpdateDeviceList (src->hIF, NULL, src->timeout);
   HANDLE_GTL_ERROR ("Failed to update device list within timeout");
@@ -927,7 +1189,7 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
       GST_ELEMENT_ERROR (src, RESOURCE, TOO_LAZY,
           ("file url not supported yet"), (NULL));
       goto error;
-    } else if (g_str_has_prefix (url, "local")) {
+    } else if (g_ascii_strncasecmp (url, "local", 5) == 0) {
       GError *err = NULL;
       GMatchInfo *matchInfo;
       GRegex *regex;
@@ -938,7 +1200,7 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
 
       regex =
           g_regex_new
-          ("local:(?:///)?(?<filename>[^;]+);(?<address>[^;]+);(?<length>[^?]+)(?:[?]SchemaVersion=([^&]+))?",
+          ("[lL]ocal:(?:///)?(?<filename>[^;]+);(?<address>[^;]+);(?<length>[^?]+)(?:[?]SchemaVersion=([^&]+))?",
           (GRegexCompileFlags) 0, (GRegexMatchFlags) 0, &err);
       if (!regex) {
         goto error;
@@ -967,6 +1229,7 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
         gchar *xml;
 
         zipfilepath = g_build_filename (g_get_tmp_dir (), filename, NULL);
+        GST_DEBUG_OBJECT (src, "Writing XML ZIP file to %s", zipfilepath);
         if (!g_file_set_contents (zipfilepath, buf, len, &err)) {
           GST_ELEMENT_ERROR (src, RESOURCE, TOO_LAZY,
               ("Failed to write zipped XML to %s", zipfilepath), (NULL));
@@ -1012,6 +1275,7 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
         g_free (zipfilepath);
 
         zipfilepath = g_build_filename (g_get_tmp_dir (), xmlfilename, NULL);
+        GST_DEBUG_OBJECT (src, "Writing XML file to %s", zipfilepath);
         g_file_set_contents (zipfilepath, xml, fileinfo.uncompressed_size,
             &err);
         g_free (zipfilepath);
@@ -1044,24 +1308,40 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
     }
   }
 
+  src->tick_frequency = gst_gentlsrc_get_gev_tick_frequency (src);
+
+  gst_gentlsrc_set_attributes (src);
+
   {
     // TODO: use GenTl node map for this
     guint32 val = 0;
     size_t datasize = 4;
-    ret = GTL_GCReadPort (src->hDevPort, GENAPI_WIDTH, &val, &datasize);
+    ret = GTL_GCReadPort (src->hDevPort, src->producer.width, &val, &datasize);
     HANDLE_GTL_ERROR ("Failed to get width");
     width = GUINT32_FROM_BE (val);
-    ret = GTL_GCReadPort (src->hDevPort, GENAPI_HEIGHT, &val, &datasize);
+    ret = GTL_GCReadPort (src->hDevPort, src->producer.height, &val, &datasize);
     HANDLE_GTL_ERROR ("Failed to get height");
     height = GUINT32_FROM_BE (val);
     GST_DEBUG_OBJECT (src, "Width and height %dx%d", width, height);
 
-    ret = GTL_GCReadPort (src->hDevPort, GENAPI_PIXFMT, &val, &datasize);
+    ret =
+        GTL_GCReadPort (src->hDevPort, src->producer.pixel_format, &val,
+        &datasize);
     HANDLE_GTL_ERROR ("Failed to get height");
     const char *genicam_pixfmt;
     guint32 pixfmt_enum = GUINT32_FROM_BE (val);
     switch (pixfmt_enum) {
-
+      case 0x1:                // Basler Ace
+      case 0x01080001:
+        genicam_pixfmt = "Mono8";
+        break;
+      case 0x5:                // Basler Ace
+      case 0x01100005:
+        genicam_pixfmt = "Mono12";
+        break;
+      case 0x1100010:          // Basler Ace
+        genicam_pixfmt = "BayerGR12";
+        break;
       case 0x01080009:
         genicam_pixfmt = "BayerRG8";
         break;
@@ -1132,15 +1412,19 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
     /* set AcquisitionMode to Continuous */
     // TODO: "Continuous" value can have different integer values, we need
     // to look it up in the node map (EVT is 0, Basler is 2)
-    val = GUINT32_TO_BE (0);
+    val = GUINT32_TO_BE (src->producer.acquisition_mode_value);
     datasize = sizeof (val);
-    ret = GTL_GCWritePort (src->hDevPort, GENAPI_ACQMODE, &val, &datasize);
+    ret =
+        GTL_GCWritePort (src->hDevPort, src->producer.acquisition_mode, &val,
+        &datasize);
     HANDLE_GTL_ERROR ("Failed to start device acquisition");
 
     /* send AcquisitionStart command */
     val = GUINT32_TO_BE (1);
     datasize = sizeof (val);
-    ret = GTL_GCWritePort (src->hDevPort, GENAPI_ACQSTART, &val, &datasize);
+    ret =
+        GTL_GCWritePort (src->hDevPort, src->producer.acquisition_start, &val,
+        &datasize);
     HANDLE_GTL_ERROR ("Failed to start device acquisition");
   }
 
@@ -1169,14 +1453,31 @@ error:
     src->hIF = NULL;
   }
 
-  if (src->hTL) {
-    GTL_TLClose (src->hTL);
-    src->hTL = NULL;
-  }
-
-  GTL_GCCloseLib ();
+  gst_gentlsrc_cleanup_tl (src);
 
   return FALSE;
+}
+
+static void
+gst_gentlsrc_cleanup_tl (GstGenTlSrc * src)
+{
+  GstGenTlSrcClass *klass = GST_GENTL_SRC_GET_CLASS (src);
+  if (src->hTL) {
+    g_mutex_lock (&klass->tl_mutex);
+    GST_DEBUG_OBJECT (src, "Framegrabber open with refcount=%d",
+        klass->tl_refcount);
+    klass->tl_refcount--;
+    if (klass->tl_refcount == 0) {
+      GST_DEBUG_OBJECT (src, "Framegrabber ref dropped to 0, closing");
+      GTL_TLClose (src->hTL);
+      src->hTL = NULL;
+    }
+    g_mutex_unlock (&klass->tl_mutex);
+    src->hTL = NULL;
+
+    // don't close library, otherwise we can't reopen in the same process
+    //GTL_GCCloseLib ();
+  }
 }
 
 static gboolean
@@ -1191,7 +1492,8 @@ gst_gentlsrc_stop (GstBaseSrc * bsrc)
     guint32 val = GUINT32_TO_BE (1);
     gsize datasize = sizeof (val);
     GC_ERROR ret =
-        GTL_GCWritePort (src->hDevPort, GENAPI_ACQSTOP, &val, &datasize);
+        GTL_GCWritePort (src->hDevPort, src->producer.acquisition_stop, &val,
+        &datasize);
 
     GTL_DSStopAcquisition (src->hDS, ACQ_STOP_FLAGS_DEFAULT);
     GTL_DSFlushQueue (src->hDS, ACQ_QUEUE_INPUT_TO_OUTPUT);
@@ -1210,12 +1512,7 @@ gst_gentlsrc_stop (GstBaseSrc * bsrc)
     src->hIF = NULL;
   }
 
-  if (src->hTL) {
-    GTL_TLClose (src->hTL);
-    src->hTL = NULL;
-  }
-
-  GTL_GCCloseLib ();
+  gst_gentlsrc_cleanup_tl (src);
 
   GST_DEBUG_OBJECT (src, "Closed data stream, device, interface, and library");
 
@@ -1298,6 +1595,8 @@ gst_gentlsrc_unlock_stop (GstBaseSrc * bsrc)
   return TRUE;
 }
 
+static GstStaticCaps unix_reference = GST_STATIC_CAPS ("timestamp/x-unix");
+
 static GstBuffer *
 gst_gentlsrc_get_buffer (GstGenTlSrc * src)
 {
@@ -1311,18 +1610,43 @@ gst_gentlsrc_get_buffer (GstGenTlSrc * src)
   bool8_t buffer_is_incomplete, is_acquiring;
   guint8 *data_ptr;
   GstMapInfo minfo;
+  GstClockTime unix_ts;
+  uint64_t buf_timestamp_ticks;
 
-  datasize = sizeof (new_buffer_data);
-  ret =
-      GTL_EventGetData (src->hNewBufferEvent, &new_buffer_data, &datasize,
-      src->timeout);
-  HANDLE_GTL_ERROR ("Failed to get New Buffer event within timeout period");
 
-  datasize = sizeof (payload_type);
+  /* sometimes we get non-image payloads, try several times for an image */
+  for (int i = 0; i < 5; ++i) {
+    datasize = sizeof (new_buffer_data);
+    ret =
+        GTL_EventGetData (src->hNewBufferEvent, &new_buffer_data, &datasize,
+        src->timeout);
+    HANDLE_GTL_ERROR ("Failed to get New Buffer event within timeout period");
+
+    datasize = sizeof (payload_type);
+    ret =
+        GTL_DSGetBufferInfo (src->hDS, new_buffer_data.BufferHandle,
+        BUFFER_INFO_PAYLOADTYPE, &datatype, &payload_type, &datasize);
+    HANDLE_GTL_ERROR ("Failed to get payload type");
+    if (payload_type != PAYLOAD_TYPE_IMAGE) {
+      GST_WARNING_OBJECT (src, "Non-image payload type, trying again");
+      continue;
+    } else {
+      break;
+    }
+  }
+
+  if (payload_type != PAYLOAD_TYPE_IMAGE) {
+    GST_ELEMENT_ERROR (src, STREAM, TOO_LAZY,
+        ("Unsupported payload type: %d", payload_type), (NULL));
+    goto error;
+  }
+
+  datasize = sizeof (buf_timestamp_ticks);
   ret =
       GTL_DSGetBufferInfo (src->hDS, new_buffer_data.BufferHandle,
-      BUFFER_INFO_PAYLOADTYPE, &datatype, &payload_type, &datasize);
-  HANDLE_GTL_ERROR ("Failed to get payload type");
+      BUFFER_INFO_TIMESTAMP, &datatype, &buf_timestamp_ticks, &datasize);
+  HANDLE_GTL_ERROR ("Failed to get buffer timestamp");
+  GST_LOG_OBJECT (src, "Buffer GentTL timestamp: %llu", buf_timestamp_ticks);
 
   datasize = sizeof (frame_id);
   ret =
@@ -1335,6 +1659,9 @@ gst_gentlsrc_get_buffer (GstGenTlSrc * src)
       GTL_DSGetBufferInfo (src->hDS, new_buffer_data.BufferHandle,
       BUFFER_INFO_IS_INCOMPLETE, &datatype, &buffer_is_incomplete, &datasize);
   HANDLE_GTL_ERROR ("Failed to get complete flag");
+  if (buffer_is_incomplete) {
+    GST_WARNING_OBJECT (src, "Buffer is incomplete");
+  }
 
   datasize = sizeof (buffer_size);
   ret =
@@ -1348,11 +1675,6 @@ gst_gentlsrc_get_buffer (GstGenTlSrc * src)
       BUFFER_INFO_BASE, &datatype, &data_ptr, &datasize);
   HANDLE_GTL_ERROR ("Failed to get buffer pointer");
 
-  if (payload_type != PAYLOAD_TYPE_IMAGE) {
-    GST_ELEMENT_ERROR (src, STREAM, TOO_LAZY,
-        ("Unsupported payload type: %d", payload_type), (NULL));
-    goto error;
-  }
   // TODO: what if strides aren't same?
 
   buf = gst_buffer_new_allocate (NULL, buffer_size, NULL);
@@ -1361,13 +1683,33 @@ gst_gentlsrc_get_buffer (GstGenTlSrc * src)
         ("Failed to allocate buffer"), (NULL));
     goto error;
   }
-
+  // TODO: try to eliminate this memcpy by using gst_buffer_new_wrapped_full
   gst_buffer_map (buf, &minfo, GST_MAP_WRITE);
   orc_memcpy (minfo.data, (void *) data_ptr, minfo.size);
   gst_buffer_unmap (buf, &minfo);
 
   GTL_DSQueueBuffer (src->hDS, new_buffer_data.BufferHandle);
   HANDLE_GTL_ERROR ("Failed to queue buffer");
+
+  GST_BUFFER_OFFSET (buf) = frame_id;
+
+  if (src->tick_frequency) {
+    gint64 nanoseconds_after_latch;
+    gint64 ticks_after_latch;
+
+    /* resync system clock and buffer clock periodically */
+    if (GST_CLOCK_DIFF (src->unix_latched_time, get_unix_ns ()) > GST_SECOND) {
+      gst_gentlsrc_src_latch_timestamps (src);
+    }
+
+    ticks_after_latch = buf_timestamp_ticks - src->gentl_latched_ticks;
+    nanoseconds_after_latch = (gint64)
+        (ticks_after_latch * ((double) GST_SECOND / src->tick_frequency));
+    unix_ts = src->unix_latched_time + nanoseconds_after_latch;
+    GST_LOG_OBJECT (src, "Adding Unix timestamp: %llu", unix_ts);
+    gst_buffer_add_reference_timestamp_meta (buf,
+        gst_static_caps_get (&unix_reference), unix_ts, GST_CLOCK_TIME_NONE);
+  }
 
   return buf;
 
@@ -1387,6 +1729,8 @@ gst_gentlsrc_create (GstPushSrc * psrc, GstBuffer ** buf)
   GstClockTime clock_time;
 
   GST_LOG_OBJECT (src, "create");
+
+  gst_gentlsrc_set_attributes (src);
 
   *buf = gst_gentlsrc_get_buffer (src);
   if (!*buf) {
@@ -1426,7 +1770,6 @@ gst_gentlsrc_create (GstPushSrc * psrc, GstBuffer ** buf)
   GST_BUFFER_TIMESTAMP (*buf) =
       GST_CLOCK_DIFF (gst_element_get_base_time (GST_ELEMENT (src)),
       clock_time);
-  //GST_BUFFER_OFFSET (*buf) = circ_handle.FrameCount - 1;
 
   if (src->stop_requested) {
     if (*buf != NULL) {
