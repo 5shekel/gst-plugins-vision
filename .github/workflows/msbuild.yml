@@ -26,6 +26,7 @@ jobs:
           
     - name: Install dependencies on windows
       run: |
+          "dir env:"
           choco install ninja cmake gstreamer gstreamer-devel --no-progres 
           ninja --version
           cmake --version
@@ -36,7 +37,7 @@ jobs:
     - run: $env:Path = "C:\gstreamer\1.0\msvc_x86_64\bin;C:\gstreamer\1.0\msvc_x86_64\lib;$env:Path"
 
     - name: get ENV vars
-      run:  printenv
+      run:  "dir env:"
 
     - name: Configure
       run: cmake -B ${{github.workspace}}/build -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/output/${{env.BUILD_TYPE}}
