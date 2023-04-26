@@ -24,15 +24,15 @@ endif ()
 
 set (_Pleora_PATHS PATHS
   "${Pleora_DIR}"
-  "C:/Program Files/Pleora Technologies Inc/eBUS SDK/Includes"
-  "C:/Program Files (x86)/Pleora Technologies Inc/eBUS SDK/Includes")
+  "C:/Program Files/Pleora Technologies Inc/eBUS SDK"
+  "C:/Program Files (x86)/Pleora Technologies Inc/eBUS SDK")
 
 find_path (Pleora_INCLUDE_DIR PvBase.h
     PATHS ${_Pleora_PATHS}
     PATH_SUFFIXES Includes include)
 message (STATUS "Found Pleora include dir in ${Pleora_INCLUDE_DIR}")
 
-find_path (Pleora_LIBRARY_DIR NAMES libPvBase.so "PvBase${_LIB_NAME}"
+find_path (Pleora_LIBRARY_DIR NAMES libPvBase.so "PvBase${_LIB_SUFFIX}.lib"
     PATHS ${_Pleora_PATHS}
     PATH_SUFFIXES Libraries lib)
 

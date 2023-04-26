@@ -64,6 +64,7 @@ initialize_evt_addresses (GstGenTlProducer * producer)
   producer->cti_path =
       g_strdup ("C:\\Program Files\\EVT\\eSDK\\bin\\EmergentGenTL.cti");
   producer->acquisition_mode_value = 0;
+  producer->timestamp_control_latch_value = 2;
   producer->width = 0xA000;
   producer->height = 0xA004;
   producer->pixel_format = 0xA008;
@@ -76,6 +77,7 @@ initialize_evt_addresses (GstGenTlProducer * producer)
   producer->timestamp_control_latch = 0x944;
   producer->timestamp_low = 0x094C;
   producer->timestamp_high = 0x0948;
+  producer->port_endianness = G_BIG_ENDIAN;
 }
 
 static void
@@ -93,7 +95,30 @@ initialize_basler_addresses (GstGenTlProducer * producer)
   producer->acquisition_mode = 0x40004;
   producer->acquisition_start = 0x40024;
   producer->acquisition_stop = 0x40044;
+  producer->port_endianness = G_BIG_ENDIAN;
 }
+
+static void
+initialize_flir_addresses (GstGenTlProducer * producer)
+{
+  memset (producer, 0, sizeof (producer));
+  producer->cti_path =
+      g_strdup
+      ("C:\\Program Files\\FLIR Systems\\Spinnaker\\cti64\\vs2015\\FLIR_GenTL_v140.cti");
+  producer->acquisition_mode_value = 0;
+  producer->timestamp_control_latch_value = 1;
+  producer->width = 0x00081084;
+  producer->height = 0x00081064;
+  producer->pixel_format = 0x00086008;
+  producer->payload_size = 0x20002008;
+  producer->acquisition_mode = 0x000C00C8;
+  producer->acquisition_start = 0x000C0004;
+  producer->acquisition_stop = 0x000C0024;
+  producer->timestamp_control_latch = 0x1F8;
+  producer->timestamp = 0x1F0;
+  producer->port_endianness = G_LITTLE_ENDIAN;
+}
+
 
 #define GST_TYPE_GENTLSRC_PRODUCER (gst_gentlsrc_producer_get_type())
 static GType
@@ -103,6 +128,7 @@ gst_gentlsrc_producer_get_type (void)
   static const GEnumValue gentlsrc_producer[] = {
     {GST_GENTLSRC_PRODUCER_BASLER, "Basler producer", "basler"},
     {GST_GENTLSRC_PRODUCER_EVT, "EVT producer", "evt"},
+    {GST_GENTLSRC_PRODUCER_FLIR, "FLIR producer", "flir"},
     {0, NULL, NULL},
   };
 
@@ -135,6 +161,7 @@ static GstFlowReturn gst_gentlsrc_create (GstPushSrc * src, GstBuffer ** buf);
 
 static gchar *gst_gentlsrc_get_error_string (GstGenTlSrc * src);
 static void gst_gentlsrc_cleanup_tl (GstGenTlSrc * src);
+static gboolean gst_gentlsrc_src_latch_timestamps (GstGenTlSrc * src);
 
 enum
 {
@@ -144,6 +171,7 @@ enum
   PROP_INTERFACE_ID,
   PROP_DEVICE_INDEX,
   PROP_DEVICE_ID,
+  PROP_DEVICE_USER_ID,
   PROP_STREAM_INDEX,
   PROP_STREAM_ID,
   PROP_NUM_CAPTURE_BUFFERS,
@@ -156,6 +184,7 @@ enum
 #define DEFAULT_PROP_INTERFACE_ID ""
 #define DEFAULT_PROP_DEVICE_INDEX 0
 #define DEFAULT_PROP_DEVICE_ID ""
+#define DEFAULT_PROP_DEVICE_USER_ID ""
 #define DEFAULT_PROP_STREAM_INDEX 0
 #define DEFAULT_PROP_STREAM_ID ""
 #define DEFAULT_PROP_NUM_CAPTURE_BUFFERS 3
@@ -382,6 +411,12 @@ gst_gentlsrc_class_init (GstGenTlSrcClass * klass)
           DEFAULT_PROP_DEVICE_ID,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
               GST_PARAM_MUTABLE_READY)));
+  g_object_class_install_property (gobject_class, PROP_DEVICE_USER_ID,
+      g_param_spec_string ("device-user-id", "Device User ID",
+          "Device User ID, overrides all other interface/device properties",
+          DEFAULT_PROP_DEVICE_USER_ID,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+              GST_PARAM_MUTABLE_READY)));
   g_object_class_install_property (gobject_class, PROP_STREAM_INDEX,
       g_param_spec_uint ("stream-index", "Stream index",
           "Stream index number, zero-based, overridden by stream-id",
@@ -417,8 +452,8 @@ gst_gentlsrc_class_init (GstGenTlSrcClass * klass)
 static void
 gst_gentlsrc_reset (GstGenTlSrc * src)
 {
-  src->gentl_latched_ticks = 0;
-  src->unix_latched_time = 0;
+  src->gentl_latched_ns = 0;
+  src->unix_latched_ns = 0;
 
   src->error_string[0] = 0;
   src->last_frame_count = 0;
@@ -484,6 +519,10 @@ gst_gentlsrc_set_property (GObject * object, guint property_id,
       g_free (src->device_id);
       src->device_id = g_strdup (g_value_get_string (value));
       break;
+    case PROP_DEVICE_USER_ID:
+      g_free (src->device_user_id);
+      src->device_user_id = g_strdup (g_value_get_string (value));
+      break;
     case PROP_STREAM_INDEX:
       src->stream_index = g_value_get_uint (value);
       break;
@@ -532,6 +571,9 @@ gst_gentlsrc_get_property (GObject * object, guint property_id,
       break;
     case PROP_DEVICE_ID:
       g_value_set_string (value, src->device_id);
+      break;
+    case PROP_DEVICE_USER_ID:
+      g_value_set_string (value, src->device_user_id);
       break;
     case PROP_STREAM_INDEX:
       g_value_set_uint (value, src->stream_index);
@@ -704,9 +746,11 @@ gst_gentl_print_device_info (GstGenTlSrc * src, uint32_t index)
   char model[GTL_MAX_STR_SIZE];
   char tl_type[GTL_MAX_STR_SIZE];
   char display_name[GTL_MAX_STR_SIZE];
+  char user_defined_name[GTL_MAX_STR_SIZE];
   gint32 access_status;
   INFO_DATATYPE datatype;
 
+  str_size = GTL_MAX_STR_SIZE;
   ret = GTL_IFGetDeviceID (src->hIF, index, dev_id, &str_size);
   if (ret != GC_ERR_SUCCESS) {
     GST_WARNING_OBJECT (src, "Failed to get device id: %s",
@@ -729,13 +773,17 @@ gst_gentl_print_device_info (GstGenTlSrc * src, uint32_t index)
   str_size = GTL_MAX_STR_SIZE;
   GTL_IFGetDeviceInfo (src->hIF, dev_id, DEVICE_INFO_DISPLAYNAME, &datatype,
       display_name, &str_size);
+  str_size = GTL_MAX_STR_SIZE;
+  GTL_IFGetDeviceInfo (src->hIF, dev_id, DEVICE_INFO_USER_DEFINED_NAME,
+      &datatype, user_defined_name, &str_size);
   str_size = sizeof (access_status);
   GTL_IFGetDeviceInfo (src->hIF, dev_id, DEVICE_INFO_ACCESS_STATUS, &datatype,
       &access_status, &str_size);
 
   GST_DEBUG_OBJECT (src,
-      "Device %d: ID=%s, Vendor=%s, Model=%s, TL_Type=%s, Display_Name=%s, Access_Status=%d",
-      index, id, vendor, model, tl_type, display_name, access_status);
+      "Device %d: ID=%s, Vendor=%s, Model=%s, TL_Type=%s, Display_Name=%s, User_Name=%s, Access_Status=%d",
+      index, id, vendor, model, tl_type, display_name, user_defined_name,
+      access_status);
 }
 
 //void gst_gentl_print_stream_info (GstGenTlSrc * src)
@@ -775,6 +823,111 @@ gst_gentl_print_device_info (GstGenTlSrc * src, uint32_t index)
 //}
 
 
+static guint32
+read_uint32 (GstGenTlSrc * src, guint64 addr, GC_ERROR * ret)
+{
+  guint32 value;
+  size_t datasize = 4;
+
+  *ret = GTL_GCReadPort (src->hDevPort, addr, &value, &datasize);
+  if (*ret != GC_ERR_SUCCESS) {
+    GST_ELEMENT_ERROR (src, LIBRARY, FAILED,
+        ("Failed to read address: %s", gst_gentlsrc_get_error_string (src)),
+        (NULL));
+    goto error;
+  }
+
+  if (src->producer.port_endianness == G_BIG_ENDIAN)
+    value = GUINT32_FROM_BE (value);
+  else
+    value = GUINT32_FROM_LE (value);
+
+  return value;
+
+error:
+  return 0;
+}
+
+static gboolean
+write_uint32 (GstGenTlSrc * src, guint64 addr, guint32 value)
+{
+  GC_ERROR ret;
+  size_t datasize = 4;
+
+  if (src->producer.port_endianness == G_BIG_ENDIAN)
+    value = GUINT32_TO_BE (value);
+  else
+    value = GUINT32_TO_LE (value);
+
+  ret = GTL_GCWritePort (src->hDevPort, addr, &value, &datasize);
+  HANDLE_GTL_ERROR ("Failed to write address");
+
+  return ret;
+
+error:
+  return ret;
+}
+
+static guint64
+read_uint64_single (GstGenTlSrc * src, guint64 addr, GC_ERROR * ret)
+{
+  guint64 value;
+  size_t datasize = 8;
+
+  *ret = GTL_GCReadPort (src->hDevPort, addr, &value, &datasize);
+  if (*ret != GC_ERR_SUCCESS) {
+    GST_ELEMENT_ERROR (src, LIBRARY, FAILED,
+        ("Failed to read address: %s", gst_gentlsrc_get_error_string (src)),
+        (NULL));
+    goto error;
+  }
+
+  if (src->producer.port_endianness == G_BIG_ENDIAN)
+    value = GUINT64_FROM_BE (value);
+  else
+    value = GUINT64_FROM_LE (value);
+
+  return value;
+
+error:
+  return 0;
+}
+
+static guint64
+read_uint64 (GstGenTlSrc * src, guint64 low_addr, guint64 high_addr,
+    GC_ERROR * ret)
+{
+  guint32 low, high;
+  size_t datasize = 4;
+  guint64 value;
+
+  *ret = GTL_GCReadPort (src->hDevPort, low_addr, &low, &datasize);
+  if (*ret != GC_ERR_SUCCESS) {
+    GST_ELEMENT_ERROR (src, LIBRARY, FAILED,
+        ("Failed to read lower address: %s",
+            gst_gentlsrc_get_error_string (src)), (NULL));
+    goto error;
+  }
+  *ret = GTL_GCReadPort (src->hDevPort, high_addr, &high, &datasize);
+  if (*ret != GC_ERR_SUCCESS) {
+    GST_ELEMENT_ERROR (src, LIBRARY, FAILED,
+        ("Failed to read upper address: %s",
+            gst_gentlsrc_get_error_string (src)), (NULL));
+    goto error;
+  }
+
+  if (src->producer.port_endianness == G_BIG_ENDIAN)
+    value = GUINT64_FROM_BE ((guint64) low << 32 | high);
+  else
+    value = GUINT64_FROM_LE ((guint64) low << 32 | high);
+
+  return value;
+
+error:
+  return 0;
+}
+
+
 static size_t
 gst_gentlsrc_get_payload_size (GstGenTlSrc * src)
 {
@@ -798,13 +951,9 @@ gst_gentlsrc_get_payload_size (GstGenTlSrc * src)
         payload_size);
   } else {
     guint32 val = 0;
-    size_t datasize = 4;
     // TODO: use node map
-    ret =
-        GTL_GCReadPort (src->hDevPort, src->producer.payload_size, &val,
-        &datasize);
+    payload_size = read_uint32 (src, src->producer.payload_size, &ret);
     HANDLE_GTL_ERROR ("Failed to get payload size");
-    payload_size = GUINT32_FROM_BE (val);
     GST_DEBUG_OBJECT (src, "Payload size defined by node map: %d",
         payload_size);
 
@@ -860,65 +1009,79 @@ gst_gentlsrc_get_gev_tick_frequency (GstGenTlSrc * src)
 {
   GC_ERROR ret;
 
-  if (!src->producer.tick_frequency_high || !src->producer.tick_frequency_low)
-    return 0;
+  if (!src->producer.tick_frequency_high || !src->producer.tick_frequency_low) {
+    // latch timestamps once
+    if (gst_gentlsrc_src_latch_timestamps (src)) {
+      GST_DEBUG_OBJECT (src, "Assuming timestamps are in nanoseconds");
+      return GST_SECOND;
+    } else {
+      GST_ERROR_OBJECT (src, "Tick frequency addresses aren't defined");
+      return 0;
+    }
+  }
 
-  guint32 freq_low, freq_high;
-  size_t datasize = 4;
-  ret = GTL_GCReadPort (src->hDevPort, src->producer.tick_frequency_low, &freq_low, &datasize); // GevTimestampTickFrequencyLow
-  HANDLE_GTL_ERROR ("Failed to get GevTimestampTickFrequencyLow");
-  ret = GTL_GCReadPort (src->hDevPort, src->producer.tick_frequency_high, &freq_high, &datasize);       // GevTimestampTickFrequencyHigh
-  HANDLE_GTL_ERROR ("Failed to get GevTimestampTickFrequencyHigh");
-
-  guint64 tick_frequency =
-      GUINT64_FROM_BE ((guint64) freq_low << 32 | freq_high);
+  guint64 tick_frequency = read_uint64 (src, src->producer.tick_frequency_low,
+      src->producer.tick_frequency_high, &ret);
   GST_DEBUG_OBJECT (src, "GEV Timestamp tick frequency is %llu",
       tick_frequency);
 
   return tick_frequency;
-
-error:
-  return 0;
 }
 
 static guint64
-gst_gentlsrc_get_gev_timestamp_ticks (GstGenTlSrc * src)
+gst_gentlsrc_get_gev_timestamp_ns (GstGenTlSrc * src)
 {
   GC_ERROR ret;
-  size_t datasize = 4;
-  guint32 val, ts_low, ts_high;
+  guint64 timestamp_ns;
 
-  val = GUINT32_TO_BE (2);
-  datasize = sizeof (val);
-  ret = GTL_GCWritePort (src->hDevPort, src->producer.timestamp_control_latch, &val, &datasize);        // GevTimestampControlLatch
+  ret =
+      write_uint32 (src, src->producer.timestamp_control_latch,
+      src->producer.timestamp_control_latch_value);
   HANDLE_GTL_WARNING ("Failed to latch timestamp GevTimestampControlLatch");
 
-  ret = GTL_GCReadPort (src->hDevPort, src->producer.timestamp_low, &ts_low, &datasize);        // GevTimestampValueLow
-  HANDLE_GTL_WARNING ("Failed to get GevTimestampValueLow");
-  ret = GTL_GCReadPort (src->hDevPort, src->producer.timestamp_high, &ts_high, &datasize);      // GevTimestampValueHigh
-  HANDLE_GTL_WARNING ("Failed to get GevTimestampValueHigh");
-  guint64 ticks = GUINT64_FROM_BE ((guint64) ts_low << 32 | ts_high);
-  GST_LOG_OBJECT (src, "Timestamp ticks are %llu", ticks);
+  if (src->producer.timestamp) {
+    timestamp_ns = read_uint64_single (src, src->producer.timestamp, &ret);
+    HANDLE_GTL_WARNING ("Failed to read device timestamp");
+  } else {
+    guint64 ticks = read_uint64 (src, src->producer.timestamp_low,
+        src->producer.timestamp_high, &ret);
+    HANDLE_GTL_WARNING ("Failed to read timestamp ticks");
+    GST_LOG_OBJECT (src, "Timestamp ticks are %llu", ticks);
 
-  return ticks;
+    if (src->tick_frequency == 0) {
+      GST_WARNING_OBJECT (src,
+          "Tick frequency undefined, can't timestamp accurately");
+      goto error;
+    }
+    timestamp_ns = ((guint64)
+        (ticks * ((double) GST_SECOND / src->tick_frequency)));;
+  }
+
+  GST_LOG_OBJECT (src, "Device timestamp in ns is %llu", timestamp_ns);
+
+  return timestamp_ns;
 
 error:
   return 0;
 }
 
-static void
+static gboolean
 gst_gentlsrc_src_latch_timestamps (GstGenTlSrc * src)
 {
   guint64 unix_ts, gev_ts;
 
   unix_ts = get_unix_ns ();
-  gev_ts = gst_gentlsrc_get_gev_timestamp_ticks (src);
+  gev_ts = gst_gentlsrc_get_gev_timestamp_ns (src);
 
   if (gev_ts != 0) {
-    src->unix_latched_time = unix_ts;
-    src->gentl_latched_ticks = gev_ts;
+    src->unix_latched_ns = unix_ts;
+    src->gentl_latched_ns = gev_ts;
+    GST_LOG_OBJECT (src, "Latched system time: %llu", src->unix_latched_ns);
+    GST_LOG_OBJECT (src, "Latched GenTL time : %llu", src->gentl_latched_ns);
+    return TRUE;
   } else {
     GST_WARNING_OBJECT (src, "Failed to latch GEV time, using old latch value");
+    return FALSE;
   }
 }
 
@@ -927,8 +1090,6 @@ gst_gentlsrc_set_attributes (GstGenTlSrc * src)
 {
   gchar **pairs;
   int i;
-  guint32 val;
-  size_t datasize;
   GC_ERROR ret;
 
   if (!src->attributes || src->attributes == 0) {
@@ -955,11 +1116,7 @@ gst_gentlsrc_set_attributes (GstGenTlSrc * src)
 
     GST_DEBUG_OBJECT (src, "Setting attribute, '%s'='%s'", pair[0], pair[1]);
 
-    val = GUINT32_TO_BE (atoi (pair[1]));
-    datasize = sizeof (val);
-    ret =
-        GTL_GCWritePort (src->hDevPort, strtol (pair[0], NULL, 16), &val,
-        &datasize);
+    ret = write_uint32 (src, strtol (pair[0], NULL, 16), atoi (pair[1]));
     if (ret != GC_ERR_SUCCESS) {
       GST_WARNING_OBJECT (src, "Failed to set attribute: %s",
           gst_gentlsrc_get_error_string (src));
@@ -1059,6 +1216,104 @@ error:
   return FALSE;
 }
 
+static void
+gst_gentlsrc_close_interface (GstGenTlSrc * src)
+{
+  if (src->hIF) {
+    GTL_IFClose (src->hIF);
+    src->hIF = NULL;
+  }
+}
+
+static void
+get_gentlsrc_select_user_id (GstGenTlSrc * src)
+{
+  GstGenTlSrcClass *klass = GST_GENTL_SRC_GET_CLASS (src);
+  GC_ERROR ret;
+  uint32_t num_ifaces, num_devs;
+  char dev_id[GTL_MAX_STR_SIZE];
+
+  ret = GTL_TLGetNumInterfaces (src->hTL, &num_ifaces);
+  HANDLE_GTL_ERROR ("Failed to get number of interfaces");
+
+  GST_DEBUG_OBJECT (src,
+      "Trying to find device-user-id='%s' on all %d interfaces",
+      src->device_user_id, num_ifaces);
+
+  for (src->interface_index = 0; src->interface_index < num_ifaces;
+      src->interface_index++) {
+    size_t id_size;
+    GST_DEBUG_OBJECT (src, "Trying to find interface ID at index %d",
+        src->interface_index);
+
+    ret = GTL_TLGetInterfaceID (src->hTL, src->interface_index, NULL, &id_size);
+    HANDLE_GTL_ERROR ("Failed to get interface ID at specified index");
+    if (src->interface_id) {
+      g_free (src->interface_id);
+    }
+    src->interface_id = (gchar *) g_malloc (id_size);
+    ret =
+        GTL_TLGetInterfaceID (src->hTL, src->interface_index, src->interface_id,
+        &id_size);
+    HANDLE_GTL_ERROR ("Failed to get interface ID at specified index");
+    GST_DEBUG_OBJECT (src, "Trying to open interface '%s'", src->interface_id);
+    ret = GTL_TLOpenInterface (src->hTL, src->interface_id, &src->hIF);
+    if (ret != GC_ERR_SUCCESS) {
+      GST_WARNING_OBJECT (src, "Interface failed to open");
+      continue;
+    }
+
+    ret = GTL_IFUpdateDeviceList (src->hIF, NULL, src->timeout);
+    HANDLE_GTL_ERROR ("Failed to update device list within timeout");
+
+    ret = GTL_IFGetNumDevices (src->hIF, &num_devs);
+    HANDLE_GTL_ERROR ("Failed to get number of devices");
+    if (num_devs == 0) {
+      gst_gentlsrc_close_interface (src);
+      continue;
+    }
+    GST_DEBUG_OBJECT (src, "Found %d devices on interface", num_devs);
+    for (src->device_index = 0; src->device_index < num_devs;
+        ++src->device_index) {
+      size_t str_size;
+      char user_defined_name[GTL_MAX_STR_SIZE];
+      INFO_DATATYPE datatype;
+
+      str_size = GTL_MAX_STR_SIZE;
+      ret = GTL_IFGetDeviceID (src->hIF, src->device_index, dev_id, &str_size);
+      if (ret != GC_ERR_SUCCESS) {
+        GST_WARNING_OBJECT (src, "Failed to get device id: %s",
+            gst_gentlsrc_get_error_string (src));
+        return;
+      }
+
+      str_size = GTL_MAX_STR_SIZE;
+      GTL_IFGetDeviceInfo (src->hIF, dev_id, DEVICE_INFO_USER_DEFINED_NAME,
+          &datatype, user_defined_name, &str_size);
+
+      GST_DEBUG_OBJECT (src, "Comparing specified user ID='%s', to '%s'",
+          src->device_user_id, user_defined_name);
+
+      if (g_strcmp0 (src->device_user_id, user_defined_name) == 0) {
+        GST_DEBUG_OBJECT (src, "Device matches!");
+        gst_gentlsrc_close_interface (src);
+        return;
+      } else {
+        GST_DEBUG_OBJECT (src, "Device doesn't match, continuing");
+      }
+    }                           // looping over devices
+    gst_gentlsrc_close_interface (src);
+  }                             // looping over interfaces
+
+  GST_ELEMENT_ERROR (src, RESOURCE, TOO_LAZY,
+      ("Failed to find device using device-user-id='%s'", src->device_user_id),
+      (NULL));
+  return;
+
+error:
+  return;
+}
+
 static gboolean
 gst_gentlsrc_start (GstBaseSrc * bsrc)
 {
@@ -1066,8 +1321,7 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
   GstGenTlSrcClass *klass = GST_GENTL_SRC_GET_CLASS (src);
   GC_ERROR ret;
   uint32_t i, num_devs;
-  guint32 width, height, stride;
-  GstVideoInfo vinfo;
+  guint32 width, height;
 
   GST_DEBUG_OBJECT (src, "start");
 
@@ -1075,6 +1329,8 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
     initialize_basler_addresses (&src->producer);
   } else if (src->producer_prop == GST_GENTLSRC_PRODUCER_EVT) {
     initialize_evt_addresses (&src->producer);
+  } else if (src->producer_prop == GST_GENTLSRC_PRODUCER_FLIR) {
+    initialize_flir_addresses (&src->producer);
   } else {
     g_assert_not_reached ();
   }
@@ -1094,6 +1350,10 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
     goto error;
   }
 
+  if (src->device_user_id && src->device_user_id[0] != 0) {
+    get_gentlsrc_select_user_id (src);
+  }
+
   if (!gst_gentlsrc_open_interface (src)) {
     g_mutex_unlock (&klass->tl_mutex);
     goto error;
@@ -1108,6 +1368,7 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
   ret = GTL_IFGetNumDevices (src->hIF, &num_devs);
   HANDLE_GTL_ERROR ("Failed to get number of devices");
   if (num_devs > 0) {
+    GST_DEBUG_OBJECT (src, "Found %d devices on interface", num_devs);
     for (i = 0; i < num_devs; ++i) {
       gst_gentl_print_device_info (src, i);
     }
@@ -1308,28 +1569,19 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
     }
   }
 
-  src->tick_frequency = gst_gentlsrc_get_gev_tick_frequency (src);
-
   gst_gentlsrc_set_attributes (src);
 
   {
     // TODO: use GenTl node map for this
-    guint32 val = 0;
-    size_t datasize = 4;
-    ret = GTL_GCReadPort (src->hDevPort, src->producer.width, &val, &datasize);
+    width = read_uint32 (src, src->producer.width, &ret);
     HANDLE_GTL_ERROR ("Failed to get width");
-    width = GUINT32_FROM_BE (val);
-    ret = GTL_GCReadPort (src->hDevPort, src->producer.height, &val, &datasize);
+    height = read_uint32 (src, src->producer.height, &ret);
     HANDLE_GTL_ERROR ("Failed to get height");
-    height = GUINT32_FROM_BE (val);
     GST_DEBUG_OBJECT (src, "Width and height %dx%d", width, height);
 
-    ret =
-        GTL_GCReadPort (src->hDevPort, src->producer.pixel_format, &val,
-        &datasize);
-    HANDLE_GTL_ERROR ("Failed to get height");
+    guint32 pixfmt_enum = read_uint32 (src, src->producer.pixel_format, &ret);
+    HANDLE_GTL_ERROR ("Failed to get pixel format");
     const char *genicam_pixfmt;
-    guint32 pixfmt_enum = GUINT32_FROM_BE (val);
     switch (pixfmt_enum) {
       case 0x1:                // Basler Ace
       case 0x01080001:
@@ -1339,6 +1591,9 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
       case 0x01100005:
         genicam_pixfmt = "Mono12";
         break;
+      case 0x1100007:
+        genicam_pixfmt = "Mono16";
+        break;
       case 0x1100010:          // Basler Ace
         genicam_pixfmt = "BayerGR12";
         break;
@@ -1347,6 +1602,12 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
         break;
       case 0x01100011:
         genicam_pixfmt = "BayerRG12";
+        break;
+      case 0x0110002E:
+        genicam_pixfmt = "BayerGR16";
+        break;
+      case 0x0110002F:
+        genicam_pixfmt = "BayerRG16";
         break;
       case 0x02180014:
         genicam_pixfmt = "RGB8Packed";
@@ -1362,7 +1623,7 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
         break;
       default:
         GST_ELEMENT_ERROR (src, RESOURCE, TOO_LAZY,
-            ("Unrecognized PixelFormat enum value: %d", pixfmt_enum), (NULL));
+            ("Unrecognized PixelFormat enum value: 0x%x", pixfmt_enum), (NULL));
         goto error;
     }
 
@@ -1375,7 +1636,6 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
     src->caps =
         gst_genicam_pixel_format_caps_from_pixel_format (genicam_pixfmt,
         G_LITTLE_ENDIAN, width, height, 30, 1, 1, 1);
-    gst_video_info_from_caps (&vinfo, src->caps);
     if (!src->caps) {
       GST_ELEMENT_ERROR (src, STREAM, WRONG_TYPE,
           ("Unknown or unsupported pixel format (%s).", genicam_pixfmt),
@@ -1383,8 +1643,12 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
       goto error;
     }
 
-    src->height = vinfo.height;
-    src->gst_stride = GST_VIDEO_INFO_COMP_STRIDE (&vinfo, 0);
+    src->height = height;
+    src->gst_stride =
+        gst_genicam_pixel_format_get_stride (genicam_pixfmt, G_LITTLE_ENDIAN,
+        width);
+    GST_DEBUG_OBJECT (src, "Height=%d, stride=%d", src->height,
+        src->gst_stride);
   }
 
   if (!gst_gentlsrc_prepare_buffers (src)) {
@@ -1406,25 +1670,17 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
 
   {
     // TODO: use GenTl node map for this
-    guint32 val;
-    size_t datasize;
 
     /* set AcquisitionMode to Continuous */
     // TODO: "Continuous" value can have different integer values, we need
     // to look it up in the node map (EVT is 0, Basler is 2)
-    val = GUINT32_TO_BE (src->producer.acquisition_mode_value);
-    datasize = sizeof (val);
     ret =
-        GTL_GCWritePort (src->hDevPort, src->producer.acquisition_mode, &val,
-        &datasize);
+        write_uint32 (src, src->producer.acquisition_mode,
+        src->producer.acquisition_mode_value);
     HANDLE_GTL_ERROR ("Failed to start device acquisition");
 
     /* send AcquisitionStart command */
-    val = GUINT32_TO_BE (1);
-    datasize = sizeof (val);
-    ret =
-        GTL_GCWritePort (src->hDevPort, src->producer.acquisition_start, &val,
-        &datasize);
+    ret = write_uint32 (src, src->producer.acquisition_start, 1);
     HANDLE_GTL_ERROR ("Failed to start device acquisition");
   }
 
@@ -1434,6 +1690,8 @@ gst_gentlsrc_start (GstBaseSrc * bsrc)
   /* TODO: check timestamps on buffers vs start time */
   src->acq_start_time =
       gst_clock_get_time (gst_element_get_clock (GST_ELEMENT (src)));
+
+  src->tick_frequency = gst_gentlsrc_get_gev_tick_frequency (src);
 
   return TRUE;
 
@@ -1448,10 +1706,7 @@ error:
     src->hDEV = NULL;
   }
 
-  if (src->hIF) {
-    GTL_IFClose (src->hIF);
-    src->hIF = NULL;
-  }
+  gst_gentlsrc_close_interface (src);
 
   gst_gentlsrc_cleanup_tl (src);
 
@@ -1489,11 +1744,8 @@ gst_gentlsrc_stop (GstBaseSrc * bsrc)
 
   if (src->hDS) {
     /* command AcquisitionStop */
-    guint32 val = GUINT32_TO_BE (1);
-    gsize datasize = sizeof (val);
-    GC_ERROR ret =
-        GTL_GCWritePort (src->hDevPort, src->producer.acquisition_stop, &val,
-        &datasize);
+    GC_ERROR ret;
+    ret = write_uint32 (src, src->producer.acquisition_stop, 1);
 
     GTL_DSStopAcquisition (src->hDS, ACQ_STOP_FLAGS_DEFAULT);
     GTL_DSFlushQueue (src->hDS, ACQ_QUEUE_INPUT_TO_OUTPUT);
@@ -1556,10 +1808,22 @@ gst_gentlsrc_set_caps (GstBaseSrc * bsrc, GstCaps * caps)
 
   GST_DEBUG_OBJECT (src, "The caps being set are %" GST_PTR_FORMAT, caps);
 
+
+  GST_ERROR ("Stride is %d", src->gst_stride);
   gst_video_info_from_caps (&vinfo, caps);
 
   if (GST_VIDEO_INFO_FORMAT (&vinfo) != GST_VIDEO_FORMAT_UNKNOWN) {
-    src->gst_stride = GST_VIDEO_INFO_COMP_STRIDE (&vinfo, 0);
+    int endianness;
+    const char *genicam_pixfmt =
+        gst_genicam_pixel_format_from_caps (caps, &endianness);
+    GST_ERROR ("Format is %s, Stride is %d", genicam_pixfmt, src->gst_stride);
+    if (genicam_pixfmt)
+      src->gst_stride =
+          gst_genicam_pixel_format_get_stride (genicam_pixfmt, G_LITTLE_ENDIAN,
+          vinfo.width);
+    else
+      goto unsupported_caps;
+    GST_ERROR ("Format is %s, Stride is %d", genicam_pixfmt, src->gst_stride);
   } else {
     goto unsupported_caps;
   }
@@ -1611,7 +1875,7 @@ gst_gentlsrc_get_buffer (GstGenTlSrc * src)
   guint8 *data_ptr;
   GstMapInfo minfo;
   GstClockTime unix_ts;
-  uint64_t buf_timestamp_ticks;
+  uint64_t buf_timestamp_ticks, buf_timestamp_ns;
 
 
   /* sometimes we get non-image payloads, try several times for an image */
@@ -1641,12 +1905,22 @@ gst_gentlsrc_get_buffer (GstGenTlSrc * src)
     goto error;
   }
 
-  datasize = sizeof (buf_timestamp_ticks);
+  datasize = sizeof (buf_timestamp_ns);
   ret =
       GTL_DSGetBufferInfo (src->hDS, new_buffer_data.BufferHandle,
-      BUFFER_INFO_TIMESTAMP, &datatype, &buf_timestamp_ticks, &datasize);
-  HANDLE_GTL_ERROR ("Failed to get buffer timestamp");
-  GST_LOG_OBJECT (src, "Buffer GentTL timestamp: %llu", buf_timestamp_ticks);
+      BUFFER_INFO_TIMESTAMP_NS, &datatype, &buf_timestamp_ns, &datasize);
+  if (ret == GC_ERR_SUCCESS) {
+    GST_LOG_OBJECT (src, "Buffer GentTL timestamp: %llu ns", buf_timestamp_ns);
+  } else {
+    ret =
+        GTL_DSGetBufferInfo (src->hDS, new_buffer_data.BufferHandle,
+        BUFFER_INFO_TIMESTAMP, &datatype, &buf_timestamp_ticks, &datasize);
+    HANDLE_GTL_ERROR ("Failed to get buffer timestamp");
+    buf_timestamp_ns = (gint64)
+        (buf_timestamp_ticks * ((double) GST_SECOND / src->tick_frequency));
+    GST_LOG_OBJECT (src, "Buffer GentTL timestamp: %llu ticks, %llu ns",
+        buf_timestamp_ticks, buf_timestamp_ns);
+  }
 
   datasize = sizeof (frame_id);
   ret =
@@ -1677,7 +1951,15 @@ gst_gentlsrc_get_buffer (GstGenTlSrc * src)
 
   // TODO: what if strides aren't same?
 
-  buf = gst_buffer_new_allocate (NULL, buffer_size, NULL);
+  guint64 image_size = (size_t) src->height * src->gst_stride;
+  if (buffer_size < image_size) {
+    GST_ELEMENT_ERROR (src, STREAM, TOO_LAZY,
+        ("Buffer size (%d) is smaller than expected image size (%llu)",
+            buffer_size, image_size), (NULL));
+    goto error;
+  }
+
+  buf = gst_buffer_new_allocate (NULL, image_size, NULL);
   if (!buf) {
     GST_ELEMENT_ERROR (src, STREAM, TOO_LAZY,
         ("Failed to allocate buffer"), (NULL));
@@ -1695,17 +1977,14 @@ gst_gentlsrc_get_buffer (GstGenTlSrc * src)
 
   if (src->tick_frequency) {
     gint64 nanoseconds_after_latch;
-    gint64 ticks_after_latch;
 
     /* resync system clock and buffer clock periodically */
-    if (GST_CLOCK_DIFF (src->unix_latched_time, get_unix_ns ()) > GST_SECOND) {
+    if (GST_CLOCK_DIFF (src->unix_latched_ns, get_unix_ns ()) > GST_SECOND) {
       gst_gentlsrc_src_latch_timestamps (src);
     }
 
-    ticks_after_latch = buf_timestamp_ticks - src->gentl_latched_ticks;
-    nanoseconds_after_latch = (gint64)
-        (ticks_after_latch * ((double) GST_SECOND / src->tick_frequency));
-    unix_ts = src->unix_latched_time + nanoseconds_after_latch;
+    nanoseconds_after_latch = buf_timestamp_ns - src->gentl_latched_ns;
+    unix_ts = src->unix_latched_ns + nanoseconds_after_latch;
     GST_LOG_OBJECT (src, "Adding Unix timestamp: %llu", unix_ts);
     gst_buffer_add_reference_timestamp_meta (buf,
         gst_static_caps_get (&unix_reference), unix_ts, GST_CLOCK_TIME_NONE);
@@ -1780,9 +2059,6 @@ gst_gentlsrc_create (GstPushSrc * psrc, GstBuffer ** buf)
   }
 
   return GST_FLOW_OK;
-
-error:
-  return GST_FLOW_ERROR;
 }
 
 gchar *

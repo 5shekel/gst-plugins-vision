@@ -39,7 +39,9 @@
 #include <gst/gst.h>
 #include <glib.h>
 
+#include "genapic/GenApiC.h"
 #include "common/genicampixelformat.h"
+
 
 static int plugin_counter = 0;
 
@@ -142,6 +144,7 @@ typedef enum _GST_PYLONSRC_PROP
   PROP_GAMMA,
   PROP_RESET,
   PROP_TESTIMAGE,
+  PROP_TESTIMAGESOURCE,
   PROP_CONTINUOUSMODE,
   PROP_PIXEL_FORMAT,
   PROP_USERID,
@@ -177,6 +180,7 @@ typedef enum _GST_PYLONSRC_PROP
   PROP_FRAMETRANSDELAY,
   PROP_BANDWIDTHRESERVE,
   PROP_BANDWIDTHRESERVEACC,
+  PROP_MAXTRANSFERSIZE,
 
   PROP_CONFIGFILE,
   PROP_IGNOREDEFAULTS,
@@ -337,6 +341,7 @@ ascii_strdown (gchar * *str, gssize len)
 #define DEFAULT_PROP_GAMMA                            1.0
 #define DEFAULT_PROP_RESET                            "off"
 #define DEFAULT_PROP_TESTIMAGE                        0
+#define DEFAULT_PROP_TESTIMAGESOURCE                  ""
 #define DEFAULT_PROP_CONTINUOUSMODE                   TRUE
 #define DEFAULT_PROP_PIXEL_FORMAT                     "auto"
 #define DEFAULT_PROP_USERID                           ""
@@ -363,6 +368,7 @@ ascii_strdown (gchar * *str, gssize len)
 #define DEFAULT_PROP_FRAMETRANSDELAY                  0
 #define DEFAULT_PROP_BANDWIDTHRESERVE                 10
 #define DEFAULT_PROP_BANDWIDTHRESERVEACC              10
+#define DEFAULT_PROP_MAXTRANSFERSIZE                  262144
 
 /* pad templates */
 static GstStaticPadTemplate gst_pylonsrc_src_template =
@@ -584,6 +590,11 @@ gst_pylonsrc_class_init (GstPylonSrcClass * klass)
           "(1-6) Specifies a test image to show instead of a video stream. Useful for debugging. Will be disabled by default.",
           0, 6, DEFAULT_PROP_TESTIMAGE,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+  g_object_class_install_property (gobject_class, PROP_TESTIMAGESOURCE,
+      g_param_spec_string ("testimagesource", "Test image source",
+          "Specifies a test image (or image directory) to show instead of a video stream. Useful for debugging. Will be disabled by default.",
+          DEFAULT_PROP_TESTIMAGESOURCE,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_CONTINUOUSMODE,
       g_param_spec_boolean ("continuous", "Continuous mode",
           "(true/false) Used to switch between triggered and continuous mode. To switch to triggered mode this parameter has to be switched to false.",
@@ -748,35 +759,46 @@ gst_pylonsrc_class_init (GstPylonSrcClass * klass)
           "Specifies the number of miiliseconds to wait for frame to be grabed from the camera.",
           0, 60000, DEFAULT_PROP_GRABTIMEOUT,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+  //TODO: Limits may be co-dependent on other transport layer parameters.
   g_object_class_install_property (gobject_class, PROP_PACKETSIZE,
       g_param_spec_int ("packet-size", "Maximum size of data packet",
           "The packetsize parameter specifies the maximum size of a data packet transmitted via Ethernet. The value is in bytes.",
           0, 16000, DEFAULT_PROP_PACKETSIZE,
-          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));     //TODO: Limits may be co-dependent on other transport layer parameters.
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+  //TODO: Limits may be co-dependent on other transport layer parameters.
   g_object_class_install_property (gobject_class, PROP_INTERPACKETDELAY,
       g_param_spec_int ("inter-packet-delay",
           "Inter-Packet Delay between packet transmissions",
           "If your network hardware can't handle the incoming packet rate, it is useful to increase the delay between packet transmissions.",
           0, 3435, DEFAULT_PROP_INTERPACKETDELAY,
-          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));     //TODO: Limits may be co-dependent on other transport layer parameters.
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+  //TODO: Limits may be co-dependent on other transport layer parameters.
   g_object_class_install_property (gobject_class, PROP_FRAMETRANSDELAY,
       g_param_spec_int ("frame-trans-delay",
           "Delay for begin transmitting frame.",
           "Sets a delay in ticks between when camera begisn transmitting frame afther acquiring it. By default, one tick equals 8 ns. With PTP enabled, one tick equals 1 ns.",
           0, 50000000, DEFAULT_PROP_FRAMETRANSDELAY,
-          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));     //TODO: Limits may be co-dependent on other transport layer parameters.
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+  //TODO: Limits may be co-dependent on other transport layer parameters.
   g_object_class_install_property (gobject_class, PROP_BANDWIDTHRESERVE,
       g_param_spec_int ("bandwidth-reserve",
           "Portion of bandwidth reserved for packet resends.",
           "The setting is expressed as a percentage of the assigned bandwidth.",
           0, 26, DEFAULT_PROP_BANDWIDTHRESERVE,
-          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));     //TODO: Limits may be co-dependent on other transport layer parameters.
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+  //TODO: Limits may be co-dependent on other transport layer parameters.
   g_object_class_install_property (gobject_class, PROP_BANDWIDTHRESERVEACC,
       g_param_spec_int ("bandwidth-reserve-acc",
           "Pool of resends for unusual situations",
           "For situations when the network connection becomes unstable. A larger number of packet resends may be needed to transmit an image",
           1, 32, DEFAULT_PROP_BANDWIDTHRESERVEACC,
-          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));     //TODO: Limits may be co-dependent on other transport layer parameters.
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+  g_object_class_install_property (gobject_class, PROP_MAXTRANSFERSIZE,
+      g_param_spec_int ("max-transfer-size",
+          "Maximum USB data transfer size in bytes",
+          "Use the MaxTransferSize parameter to specify the maximum USB data transfer size in bytes. The default value is appropriate for most applications. Increase the value to lower the CPU load. USB host adapter drivers may require decreasing the value if the application fails to receive the image stream. The maximum value depends on the operating system.",
+          0x400, 0x400000, DEFAULT_PROP_MAXTRANSFERSIZE,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 }
 
 static gboolean
@@ -814,6 +836,7 @@ gst_pylonsrc_init (GstPylonSrc * src)
   src->cameraId = DEFAULT_PROP_CAMERA;
   src->maxBandwidth = DEFAULT_PROP_MAXBANDWIDTH;
   src->testImage = DEFAULT_PROP_TESTIMAGE;
+  src->testImageSource = g_strdup (DEFAULT_PROP_TESTIMAGESOURCE);
   src->sensorMode = g_strdup (DEFAULT_PROP_SENSORREADOUTMODE);
   src->lightsource = g_strdup (DEFAULT_PROP_LIGHTSOURCE);
 
@@ -872,6 +895,7 @@ gst_pylonsrc_init (GstPylonSrc * src)
   src->frameTransDelay = DEFAULT_PROP_FRAMETRANSDELAY;
   src->bandwidthReserve = DEFAULT_PROP_BANDWIDTHRESERVE;
   src->bandwidthReserveAcc = DEFAULT_PROP_BANDWIDTHRESERVEACC;
+  src->maxTransferSize = DEFAULT_PROP_MAXTRANSFERSIZE;
 
   for (int i = 0; i < PROP_NUM_PROPERTIES; i++) {
     src->propFlags[i] = GST_PYLONSRC_PROPST_DEFAULT;
@@ -982,6 +1006,10 @@ gst_pylonsrc_set_property (GObject * object, guint property_id,
     case PROP_TESTIMAGE:
       src->testImage = g_value_get_int (value);
       break;
+    case PROP_TESTIMAGESOURCE:
+      g_free (src->testImageSource);
+      src->testImageSource = g_value_dup_string (value);
+      break;
     case PROP_SENSORREADOUTMODE:
       g_free (src->sensorMode);
       src->sensorMode = g_value_dup_string (value);
@@ -1080,7 +1108,7 @@ gst_pylonsrc_set_property (GObject * object, guint property_id,
       set_prop_implicitly (object, PROP_COLORADJUSTMENTENABLE, pspec);
       break;
     case PROP_COLORADJUSTMENTENABLE:
-      src->colorAdjustment = g_value_get_boolean(value);
+      src->colorAdjustment = g_value_get_boolean (value);
       break;
     case PROP_MAXBANDWIDTH:
       src->maxBandwidth = g_value_get_int (value);
@@ -1214,6 +1242,9 @@ gst_pylonsrc_set_property (GObject * object, guint property_id,
     case PROP_BANDWIDTHRESERVEACC:
       src->bandwidthReserveAcc = g_value_get_int (value);
       break;
+    case PROP_MAXTRANSFERSIZE:
+      src->maxTransferSize = g_value_get_int (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       return;
@@ -1253,6 +1284,9 @@ gst_pylonsrc_get_property (GObject * object, guint property_id,
       break;
     case PROP_TESTIMAGE:
       g_value_set_int (value, src->testImage);
+      break;
+    case PROP_TESTIMAGESOURCE:
+      g_value_set_string (value, src->testImageSource);
       break;
     case PROP_SENSORREADOUTMODE:
       g_value_set_string (value, src->sensorMode);
@@ -1330,7 +1364,7 @@ gst_pylonsrc_get_property (GObject * object, guint property_id,
       g_value_set_double (value, src->saturation[COLOUR_MAGENTA]);
       break;
     case PROP_COLORADJUSTMENTENABLE:
-      g_value_set_boolean(value, src->colorAdjustment);
+      g_value_set_boolean (value, src->colorAdjustment);
       break;
     case PROP_MAXBANDWIDTH:
       g_value_set_int (value, src->maxBandwidth);
@@ -1448,6 +1482,9 @@ gst_pylonsrc_get_property (GObject * object, guint property_id,
       break;
     case PROP_BANDWIDTHRESERVEACC:
       g_value_set_int (value, src->bandwidthReserveAcc);
+      break;
+    case PROP_MAXTRANSFERSIZE:
+      g_value_set_int (value, src->maxTransferSize);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -2127,6 +2164,32 @@ gst_pylonsrc_set_test_image (GstPylonSrc * src)
       }
     }
     reset_prop (src, PROP_TESTIMAGE);
+  }
+  return TRUE;
+
+error:
+  return FALSE;
+}
+
+static gboolean
+gst_pylonsrc_set_test_image_source (GstPylonSrc * src)
+{
+  if (is_prop_implicit (src, PROP_TESTIMAGESOURCE) &&
+      !(is_prop_default (src, PROP_TESTIMAGESOURCE))) {
+    // Set whether test image will be shown
+    if (feature_supported (src, "ImageFilename")) {
+      GENAPIC_RESULT res;
+      res = PylonDeviceFeatureFromString(src->deviceHandle, "TestImageSelector", "Off");
+      PYLONC_CHECK_ERROR(src, res);
+      /* Enable custom test images */
+      res = PylonDeviceFeatureFromString(src->deviceHandle, "ImageFileMode", "On");
+      PYLONC_CHECK_ERROR(src, res);
+
+      GST_DEBUG_OBJECT (src, "Test image source enabled and set to %s", src->testImageSource);
+      res = PylonDeviceFeatureFromString(src->deviceHandle, "ImageFilename", src->testImageSource);
+      PYLONC_CHECK_ERROR (src, res);
+    }
+    reset_prop (src, PROP_TESTIMAGESOURCE);
   }
   return TRUE;
 
@@ -3051,6 +3114,39 @@ error:
 }
 
 static gboolean
+gst_pylonsrc_set_maxTransferSize (GstPylonSrc * src)
+{
+  GENAPIC_RESULT res;
+
+  if (is_prop_implicit (src, PROP_MAXTRANSFERSIZE)) {
+    if (is_prop_set (src, PROP_MAXTRANSFERSIZE)) {
+      NODE_HANDLE phNode = 0;
+      NODEMAP_HANDLE phStreamGrabberNodeMap = 0;
+      PylonStreamGrabberGetNodeMap (src->streamGrabber,
+          &phStreamGrabberNodeMap);
+      if (!phStreamGrabberNodeMap)
+        goto error;
+      GenApiNodeMapGetNode (phStreamGrabberNodeMap, "MaxTransferSize", &phNode);
+      if (phNode) {
+        _Bool isWritable = 0;
+        GenApiNodeIsWritable (phNode, &isWritable);
+        if (isWritable) {
+          GST_DEBUG_OBJECT (src, "Setting max transfer size to %d",
+              src->maxTransferSize);
+          res = GenApiIntegerSetValue (phNode, src->maxTransferSize);
+          PYLONC_CHECK_ERROR (src, res);
+        }
+      }
+    }
+    reset_prop (src, PROP_MAXTRANSFERSIZE);
+  }
+  return TRUE;
+
+error:
+  return FALSE;
+}
+
+static gboolean
 gst_pylonsrc_configure_start_acquisition (GstPylonSrc * src)
 {
   GENAPIC_RESULT res;
@@ -3073,6 +3169,9 @@ gst_pylonsrc_configure_start_acquisition (GstPylonSrc * src)
   PYLONC_CHECK_ERROR (src, res);
   res = PylonStreamGrabberOpen (src->streamGrabber);
   PYLONC_CHECK_ERROR (src, res);
+
+  // set the max transfer size in case of USB
+  gst_pylonsrc_set_maxTransferSize (src);
 
   // Get the wait object
   res = PylonStreamGrabberGetWaitObject (src->streamGrabber, &src->waitObject);
@@ -3998,6 +4097,7 @@ gst_pylonsrc_set_properties (GstPylonSrc * src)
       gst_pylonsrc_set_reverse (src) &&
       gst_pylonsrc_set_pixel_format (src) &&
       gst_pylonsrc_set_test_image (src) &&
+      gst_pylonsrc_set_test_image_source (src) &&
       gst_pylonsrc_set_packetsize (src) &&
       gst_pylonsrc_set_interPacketDelay (src) &&
       gst_pylonsrc_set_frameTransDelay (src) &&
@@ -4132,13 +4232,13 @@ gst_pylonsrc_create (GstPushSrc * psrc, GstBuffer ** buf)
     if (grabResult.Status != Grabbed) {
       src->failedFrames += 1;
       GST_WARNING_OBJECT (src,
-          "Failed capture count=%d. Status=%d, ErrorCode=%d", src->failedFrames,
+          "Failed capture count=%d. Status=%d, ErrorCode=0x%.8X", src->failedFrames,
           grabResult.Status, grabResult.ErrorCode);
     } else
       src->failedFrames = 0;
   } else {
     GST_ERROR_OBJECT (src,
-        "Error in the image processing loop. Status=%d, ErrorCode=%d",
+        "Error in the image processing loop. Status=%d, ErrorCode=0x%.8X",
         grabResult.Status, grabResult.ErrorCode);
     goto error;
   }
@@ -4264,8 +4364,7 @@ pylonc_print_camera_info (GstPylonSrc * src, PYLON_DEVICE_HANDLE deviceHandle,
   size_t siz = 0;
   GENAPIC_RESULT res;
 
-  if (PylonDeviceFeatureIsReadable (deviceHandle, "DeviceModelName")
-      && PylonDeviceFeatureIsReadable (deviceHandle, "DeviceSerialNumber")) {
+  if (PylonDeviceFeatureIsAvailable (deviceHandle, "DeviceModelName")) {
     siz = sizeof (name);
     res =
         PylonDeviceFeatureToString (deviceHandle, "DeviceModelName", name,
