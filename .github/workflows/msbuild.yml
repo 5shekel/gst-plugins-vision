@@ -31,7 +31,7 @@ jobs:
           cmake --version    
     
     - name: add to env
-    - run: |
+      run: |
         echo "GSTREAMER_1_0_ROOT_X86_64=C:\gstreamer\1.0\msvc_x86_64\" >> $env:GITHUB_ENV
         echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=C:\gstreamer\1.0\msvc_x86_64\" >> $env:GITHUB_ENV
         echo "GSTREAMER_ROOT=C:\gstreamer\1.0\msvc_x86_64\" >> $env:GITHUB_ENV
