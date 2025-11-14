@@ -7,8 +7,8 @@
 # ]
 # ///
 #
-# NOTE: For higher performance (200+ fps), see the Go implementation:
-#       scripts/go/main.go - Significantly faster, handles 200+ fps easily
+# NOTE: For higher performance (?), see the Go implementation:
+#       scripts/go/main.go -
 #       Build: Run scripts/build_go_receiver.ps1 (Windows) or scripts/build_go_receiver.sh (Linux/macOS)
 #       See scripts/go/README.md for setup instructions
 #
