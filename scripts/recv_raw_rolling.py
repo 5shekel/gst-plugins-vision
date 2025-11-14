@@ -64,15 +64,18 @@ while True:
     
     # Apply rotation if configured
     if ROTATION is not None:
-        column = cv2.rotate(frame, ROTATION)
+        rotated = cv2.rotate(frame, ROTATION)
     else:
-        column = frame
+        rotated = frame
+    
+    # Extract only the first column for smoother rolling (1 pixel/frame)
+    column = rotated[:, 0:1, :]
 
-    # Insert the column into the rolling buffer at the current position
-    rolling_buffer[:, current_column:current_column+COLUMN_WIDTH, :] = column
+    # Insert the single column into the rolling buffer at the current position
+    rolling_buffer[:, current_column:current_column+1, :] = column
 
     # Move to the next column position, wrapping around when reaching the end
-    current_column = (current_column + COLUMN_WIDTH) % DISPLAY_WIDTH
+    current_column = (current_column + 1) % DISPLAY_WIDTH
 
     # Display the rolling buffer
     cv2.imshow("Rolling Column Stream", rolling_buffer)

@@ -1,5 +1,24 @@
 # how to send a line
 
+real data 
+```powershell
+gst-launch-1.0 idsueyesrc config-file=ini/200fps-2456x4pix-cw.ini exposure=5 framerate=300  `
+    ! videoconvert ! queue `   
+    ! udpsink host=127.0.0.1 port=5000
+```
+
+### Python/OpenCV Receiver
+```pwsh
+uv run scripts/recv_raw_column.py
+```
+or rolling like 
+```pwsh
+uv run .\scripts\recv_raw_rolling.py
+```
+See [`scripts/recv_raw_column.py`](scripts/recv_raw_column.py) for the Python implementation with debug options.
+
+
+# demo data
 ## Sender (crop to first column, send raw over UDP)
 ```pwsh
 gst-launch-1.0 -v `
@@ -9,10 +28,6 @@ gst-launch-1.0 -v `
     udpsink host=127.0.0.1 port=5000
 ```
 
-**Note:** Default `videotestsrc` height is 640, not 480. Adjust caps to match your actual frame size.
-
-## Receiver Options
-
 ### GStreamer Receiver (raw UDP → display)
 ```pwsh
 gst-launch-1.0 -v `
@@ -21,9 +36,3 @@ gst-launch-1.0 -v `
     autovideosink
 ```
 
-### Python/OpenCV Receiver
-```pwsh
-uv run scripts/recv_raw_column.py
-```
-
-See [`scripts/recv_raw_column.py`](scripts/recv_raw_column.py) for the Python implementation with debug options.
