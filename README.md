@@ -2,6 +2,32 @@
 
 GStreamer plugins related to the field of machine vision.
 
+we only care for ids,
+
+run using
+```
+gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! queue ! autovideosink
+```
+
+drop frame if sum of image is bigger then 0.5
+```
+gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=1000 column-index=1 threshold=0.5 ! queue ! autovideosink
+```
+
+**Note:** The `rollingsum` element analyzes a single column of pixels and drops frames when the column mean deviates from the rolling mean baseline by more than the threshold. Use `videoconvert` to ensure proper format negotiation.
+
+Additional examples:
+```bash
+# Analyze column 320 with larger window
+gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=5000 column-index=320 threshold=0.3 ! queue ! autovideosink
+
+# Use stride for faster processing (sample every 2 rows)
+gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=1000 column-index=1 stride=2 threshold=0.5 ! queue ! autovideosink
+
+# Lower threshold for more sensitive detection
+gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum threshold=0.2 ! queue ! autovideosink
+```
+
 
 ## Image acquisition elements
 
@@ -35,6 +61,7 @@ GStreamer plugins related to the field of machine vision.
 - extractcolor: Extract a single color channel
 - klvinjector: Inject test synchronous KLV metadata
 - klvinspector: Inspect synchronous KLV metadata
+- rollingsum: Drops frames based on rolling mean analysis of a single column
 - sfx3dnoise: Applies 3D noise to video
 - videolevels: Scales monochrome 8- or 16-bit video to 8-bit, via manual setpoints or AGC
 

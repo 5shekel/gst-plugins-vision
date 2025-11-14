@@ -1,0 +1,86 @@
+cmake_minimum_required(VERSION 3.5.0)
+
+project(gst-idsueye-plugin)
+
+# Values used when registering plugins
+add_definitions(-DGST_PACKAGE_VERSION="idsueye-standalone")
+add_definitions(-DGST_PACKAGE_LICENSE="LGPL")
+add_definitions(-DGST_PACKAGE_ORIGIN="Unknown package origin")
+add_definitions(-DGST_PACKAGE_NAME="${CMAKE_PROJECT_NAME}")
+add_definitions(-DPACKAGE="${CMAKE_PROJECT_NAME} package")
+
+set(CMAKE_SHARED_MODULE_PREFIX "lib")
+set(CMAKE_SHARED_LIBRARY_PREFIX "lib")
+
+# Add local cmake modules
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/modules)
+
+# Find required packages
+find_package(GStreamer REQUIRED COMPONENTS base)
+find_package(GStreamerPluginsBase REQUIRED COMPONENTS video)
+find_package(GLIB2 REQUIRED)
+find_package(GObject REQUIRED)
+find_package(IDSuEye REQUIRED)
+
+# Setup include directories
+include_directories(
+    .
+    ${GSTREAMER_INCLUDE_DIR}
+    ${GLIB2_INCLUDE_DIR}
+    ${IDSUEYE_INCLUDE_DIR})
+
+# Set install directories
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+  if (WIN32)
+    get_filename_component(_PREFIX "${GSTREAMER_PLUGIN_DIR}/../" REALPATH)
+  else ()
+    set(_PREFIX "/usr/lib")
+  endif ()
+  set(CMAKE_INSTALL_PREFIX "${_PREFIX}"
+      CACHE PATH "Common prefix for all installed files" FORCE)
+endif()
+
+if (NOT PLUGIN_INSTALL_DIR)
+  set(PLUGIN_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/gstreamer-1.0/"
+      CACHE PATH "Location to install plugins")
+endif()
+
+if (WIN32 AND NOT PDB_INSTALL_DIR)
+  set(PDB_INSTALL_DIR "${CMAKE_INSTALL_PREFIX}/gstreamer-1.0/"
+      CACHE PATH "Location to install PDB debug files")
+endif()
+
+# Build the IDS uEye plugin
+set(SOURCES
+  sys/idsueye/gstidsueyesrc.c)
+    
+set(HEADERS
+  sys/idsueye/gstidsueyesrc.h)
+
+set(libname gstidsueye)
+
+add_library(${libname} MODULE
+  ${SOURCES}
+  ${HEADERS})
+
+target_link_libraries(${libname}
+  ${GLIB2_LIBRARIES}
+  ${GOBJECT_LIBRARIES}
+  ${GSTREAMER_LIBRARY}
+  ${GSTREAMER_BASE_LIBRARY}
+  ${GSTREAMER_VIDEO_LIBRARY}
+  ${IDSUEYE_LIBRARIES})
+
+if (WIN32)
+  install(FILES $<TARGET_PDB_FILE:${libname}> DESTINATION ${PDB_INSTALL_DIR} COMPONENT pdb OPTIONAL)
+endif()
+install(TARGETS ${libname} LIBRARY DESTINATION ${PLUGIN_INSTALL_DIR})
+
+# Print configuration summary
+message(STATUS "")
+message(STATUS "IDS uEye Plugin Build Configuration:")
+message(STATUS "  GStreamer root: ${GSTREAMER_ROOT}")
+message(STATUS "  IDS uEye SDK: ${IDSUEYE_DIR}")
+message(STATUS "  Install prefix: ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "  Plugin install dir: ${PLUGIN_INSTALL_DIR}")
+message(STATUS "")
