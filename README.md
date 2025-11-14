@@ -2,6 +2,11 @@
 
 GStreamer plugins for IDS uEye cameras with frame analysis capabilities.
 
+#### TODO
+ - []  idsueyesrc doesnt respect auto exposure set in ini file. need to be set in filter  `exposure=0.5`
+ - []  
+
+
 ## Supported Elements
 
 ### Image Acquisition
@@ -15,13 +20,13 @@ GStreamer plugins for IDS uEye cameras with frame analysis capabilities.
 
 ### Basic capture from IDS uEye camera
 ```bash
-gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! queue ! autovideosink
+gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! queue ! autovideosink
 ```
 
 ### Frame filtering based on column analysis
 Drop frames when column mean deviates from rolling baseline by more than 0.5:
 ```bash
-gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=1000 column-index=1 threshold=0.5 ! queue ! autovideosink
+gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=1000 column-index=1 threshold=0.5 ! queue ! autovideosink
 ```
 
 **Note:** The `rollingsum` element analyzes a single column of pixels and drops frames when the column mean deviates from the rolling mean baseline by more than the threshold. Use `videoconvert` to ensure proper format negotiation.
@@ -30,17 +35,17 @@ gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! 
 
 Analyze column 320 with larger window:
 ```bash
-gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=5000 column-index=320 threshold=0.3 ! queue ! autovideosink
+gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=5000 column-index=320 threshold=0.3 ! queue ! autovideosink
 ```
 
 Use stride for faster processing (sample every 2 rows):
 ```bash
-gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=1000 column-index=1 stride=2 threshold=0.5 ! queue ! autovideosink
+gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=1000 column-index=1 stride=2 threshold=0.5 ! queue ! autovideosink
 ```
 
 Lower threshold for more sensitive detection:
 ```bash
-gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum threshold=0.2 ! queue ! autovideosink
+gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum threshold=0.2 ! queue ! autovideosink
 ```
 
 ## Dependencies
@@ -60,15 +65,6 @@ $env:GST_PLUGIN_PATH = "C:\path\to\your\plugins"
 
 # Build all plugins (IDS uEye + rollingsum) and auto-copy to GST_PLUGIN_PATH
 .\build.ps1
-
-# Or build only IDS uEye plugin
-.\build.ps1 -BuildType IDSuEyeOnly
-
-# Debug build without auto-copy
-.\build.ps1 -Config Debug -NoCopy
-
-# Custom GStreamer path
-.\build.ps1 -GStreamerRoot "C:\custom\gstreamer\path"
 ```
 
 For more options, see:
@@ -112,11 +108,4 @@ gst-inspect-1.0 rollingsum
 
 ## Documentation
 
-- [IDS uEye Build Instructions](BUILD_IDSUEYE.md)
 - [Rolling Sum Filter Design](DESIGN_ROLLINGSUM.md)
-
-## See Also
-
-- [Aravis](https://github.com/AravisProject/aravis) - Linux open source GStreamer plugin for GigE Vision and USB3 Vision cameras
-
-[1]: http://www.ids-imaging.com
