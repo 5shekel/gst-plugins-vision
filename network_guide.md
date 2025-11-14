@@ -3,9 +3,11 @@
 real data 
 ```powershell
 gst-launch-1.0 idsueyesrc config-file=ini/200fps-2456x4pix-cw.ini exposure=5 framerate=300  `
-    ! videoconvert ! queue `   
+    ! queue `   
     ! udpsink host=127.0.0.1 port=5000
 ```
+
+note: 5ms is bit too fast for us
 
 ### Python/OpenCV Receiver
 ```pwsh
@@ -35,4 +37,3 @@ gst-launch-1.0 -v `
     videoconvert ! `
     autovideosink
 ```
-

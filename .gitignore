@@ -38,5 +38,6 @@ ipch/
 
 *.mkv
 *.raw
+*.dot
 gst_plugs/
 results/
