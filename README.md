@@ -109,3 +109,13 @@ gst-inspect-1.0 rollingsum
 ## Documentation
 
 - [Rolling Sum Filter Design](DESIGN_ROLLINGSUM.md)
+
+## Debugging
+add `$env:GST_DEBUG_DUMP_DOT_DIR='.'` 
+
+![](dot_pause-play.svg)
+
+to get dotfile, and view using https://dreampuf.github.io/GraphvizOnline/, or
+```pwsh
+dot -Tsvg C:\dev\gst-plugins-vision\0.00.02.922833100-gst-launch.PAUSED_PLAYING.dot -o same.svg
+```
