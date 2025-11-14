@@ -23,7 +23,7 @@ GStreamer plugins for IDS uEye cameras with frame analysis capabilities.
 gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! queue ! autovideosink
 ```
 
-### Frame filtering based on column analysis
+## WIP - Frame filtering based on column analysis
 Drop frames when column mean deviates from rolling baseline by more than 0.5:
 ```powershell
 gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=1000 column-index=1 threshold=0.5 ! queue ! autovideosink
@@ -46,6 +46,50 @@ gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.in
 Lower threshold for more sensitive detection:
 ```powershell
 gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum threshold=0.2 ! queue ! autovideosink
+```
+
+## Network Streaming
+
+### Sending Line Scan Data Over UDP
+
+#### Real Data Pipeline
+Send camera data as raw UDP stream (note: 5ms exposure is too fast):
+```powershell
+gst-launch-1.0 idsueyesrc config-file=ini/200fps-2456x4pix-cw.ini exposure=5 framerate=300  `
+    ! queue `
+    ! udpsink host=127.0.0.1 port=5000
+```
+
+#### Python/OpenCV Receiver
+Receive and process raw column data:
+```pwsh
+uv run scripts/recv_raw_column.py
+```
+
+Or with rolling analysis:
+```pwsh
+uv run .\scripts\recv_raw_rolling.py
+```
+
+See [`scripts/recv_raw_column.py`](scripts/recv_raw_column.py) for the Python implementation with debug options.
+
+### Demo/Test Data Streaming
+
+#### Sender (crop to first column, send raw over UDP)
+```pwsh
+gst-launch-1.0 -v `
+    videotestsrc pattern=smpte ! `
+    videocrop left=0 right=639 top=0 bottom=0 ! `
+    video/x-raw,format=RGB,width=1,height=640,framerate=30/1 ! `
+    udpsink host=127.0.0.1 port=5000
+```
+
+#### GStreamer Receiver (raw UDP → display)
+```pwsh
+gst-launch-1.0 -v `
+    udpsrc port=5000 caps="video/x-raw,format=RGB,width=1,height=640,framerate=30/1" ! `
+    videoconvert ! `
+    autovideosink
 ```
 
 ## Dependencies
