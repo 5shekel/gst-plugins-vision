@@ -29,12 +29,15 @@ parser.add_argument('--no-display', action='store_true',
 parser.add_argument('--display-fps', type=int, default=0,
                     help='Limit display refresh rate (0=every frame, 60=60fps, etc). Reduces cv2.imshow() overhead while receiving all frames')
 parser.add_argument('--save-mjpeg', type=str, default=None,
-                    help='Save rolling display to MJPEG video file (e.g., output.avi). Uses display-fps if set, otherwise 30 fps')
+                    help='Save rolling display to MJPEG video file (e.g., output.avi). Works independently of display')
+parser.add_argument('--record-fps', type=int, default=30,
+                    help='Recording frame rate for --save-mjpeg (default: 30 fps). Independent of display-fps')
 args = parser.parse_args()
 
-# Import OpenCV only if display is enabled
+# Import OpenCV only if display or recording is enabled
 ENABLE_DISPLAY = not args.no_display
-if ENABLE_DISPLAY:
+ENABLE_RECORDING = args.save_mjpeg is not None
+if ENABLE_DISPLAY or ENABLE_RECORDING:
     import cv2
 
 # Debug flag - set to True to see frame reception details
@@ -75,33 +78,45 @@ if ENABLE_DISPLAY:
     else:
         print(f"Display: ENABLED - Rolling display ({DISPLAY_WIDTH}x{DISPLAY_HEIGHT}) @ full rate")
 else:
-    print(f"Display: DISABLED - Stats only mode (max performance)")
+    print(f"Display: DISABLED")
+if ENABLE_RECORDING:
+    print(f"Recording: ENABLED - {args.save_mjpeg} @ {args.record_fps} fps")
+else:
+    print(f"Recording: DISABLED")
 if DEBUG:
     print(f"Expected frame size: {FRAME_SIZE} bytes")
 
 # Initialize display if enabled
+display_buffer_obj = None
+display_current_column = 0
+last_display_time = 0
+display_interval = 0
+
 if ENABLE_DISPLAY:
     cv2.namedWindow("Rolling Column Stream", cv2.WINDOW_NORMAL)
-    rolling_buffer = np.zeros((DISPLAY_HEIGHT, DISPLAY_WIDTH, CHANNELS), dtype=np.uint8)
-    current_column = 0
+    display_buffer_obj = np.zeros((DISPLAY_HEIGHT, DISPLAY_WIDTH, CHANNELS), dtype=np.uint8)
     
     # Display throttling support
     if args.display_fps > 0:
         display_interval = 1.0 / args.display_fps  # seconds between display updates
-        last_display_time = 0
     else:
         display_interval = 0  # Update every frame
-        last_display_time = 0
+
+# Initialize recording if enabled (independent of display)
+record_buffer_obj = None
+record_current_column = 0
+last_record_time = 0
+record_interval = 0
+video_writer = None
+
+if ENABLE_RECORDING:
+    record_buffer_obj = np.zeros((DISPLAY_HEIGHT, DISPLAY_WIDTH, CHANNELS), dtype=np.uint8)
+    record_interval = 1.0 / args.record_fps if args.record_fps > 0 else 0
     
-    # MJPEG video writer setup
-    video_writer = None
-    if args.save_mjpeg:
-        # Use display-fps if set, otherwise default to 30 fps for video
-        video_fps = args.display_fps if args.display_fps > 0 else 30
-        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-        video_writer = cv2.VideoWriter(args.save_mjpeg, fourcc, video_fps,
-                                       (DISPLAY_WIDTH, DISPLAY_HEIGHT))
-        print(f"Recording to: {args.save_mjpeg} @ {video_fps} fps")
+    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+    video_writer = cv2.VideoWriter(args.save_mjpeg, fourcc, args.record_fps,
+                                   (DISPLAY_WIDTH, DISPLAY_HEIGHT))
+    print(f"Recording initialized: {args.save_mjpeg} @ {args.record_fps} fps")
 
 frame_count = 0
 
@@ -157,24 +172,22 @@ while True:
         
         print(status)
 
-    if ENABLE_DISPLAY:
-        # Parse the incoming data - ALWAYS process every frame
+    # Parse the incoming data - process for display and/or recording
+    if ENABLE_DISPLAY or ENABLE_RECORDING:
         # Receiving 2456x1 line directly - reshape as a vertical column
         # Input is 2456 pixels wide x 1 pixel tall, we want it as 2456 tall x 1 wide
         frame = np.frombuffer(data, dtype=np.uint8).reshape((COLUMN_HEIGHT, COLUMN_WIDTH, CHANNELS))
         
         # Transpose to vertical and flip to correct 180-degree rotation: (1, 2456, 3) -> (2456, 1, 3) flipped
         column = frame.transpose(1, 0, 2)[::-1]
-
-        # Insert the single column into the rolling buffer at the current position
-        # Rolling from right to left to correct horizontal flip
-        rolling_buffer[:, current_column:current_column+1, :] = column
-
-        # Move to the next column position (right to left), wrapping around when reaching the start
-        current_column = (current_column - 1) % DISPLAY_WIDTH
+    
+    # Update display buffer and show if enabled
+    if ENABLE_DISPLAY:
+        # Insert the single column into the display rolling buffer
+        display_buffer_obj[:, display_current_column:display_current_column+1, :] = column
+        display_current_column = (display_current_column - 1) % DISPLAY_WIDTH
 
         # Display throttling: only refresh display at specified rate
-        # This reduces cv2.imshow() / cv2.waitKey() overhead while keeping all data
         should_display = True
         if args.display_fps > 0:
             if current_time - last_display_time >= display_interval:
@@ -185,23 +198,40 @@ while True:
         
         if should_display:
             # Flip horizontally for display to correct orientation (using efficient slicing)
-            display_buffer = rolling_buffer[:, ::-1]
-            
-            # Display the rolling buffer (clean, no overlays)
-            cv2.imshow("Rolling Column Stream", display_buffer)
-            
-            # Write frame to video if recording
-            if video_writer is not None:
-                video_writer.write(display_buffer)
+            display_frame = display_buffer_obj[:, ::-1]
+            cv2.imshow("Rolling Column Stream", display_frame)
 
             if cv2.waitKey(1) == 27:  # ESC to quit
                 break
-    else:
-        # No display mode - just validate the data can be reshaped
+    
+    # Update recording buffer and write if enabled (independent of display)
+    if ENABLE_RECORDING:
+        # Insert the single column into the recording rolling buffer
+        record_buffer_obj[:, record_current_column:record_current_column+1, :] = column
+        record_current_column = (record_current_column - 1) % DISPLAY_WIDTH
+        
+        # Recording throttling: only write frames at specified rate
+        should_record = True
+        if record_interval > 0:
+            if current_time - last_record_time >= record_interval:
+                last_record_time = current_time
+                should_record = True
+            else:
+                should_record = False
+        
+        if should_record and video_writer is not None:
+            # Flip horizontally for recording to correct orientation
+            record_frame = record_buffer_obj[:, ::-1]
+            video_writer.write(record_frame)
+    
+    # For stats-only mode, just validate the data can be reshaped
+    if not ENABLE_DISPLAY and not ENABLE_RECORDING:
         frame = np.frombuffer(data, dtype=np.uint8).reshape((COLUMN_HEIGHT, COLUMN_WIDTH, CHANNELS))
 
+# Cleanup
+if video_writer is not None:
+    video_writer.release()
+    print(f"Video saved: {args.save_mjpeg}")
+
 if ENABLE_DISPLAY:
-    if video_writer is not None:
-        video_writer.release()
-        print(f"Video saved: {args.save_mjpeg}")
     cv2.destroyAllWindows()
