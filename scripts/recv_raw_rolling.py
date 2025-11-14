@@ -163,15 +163,15 @@ while True:
         # Input is 2456 pixels wide x 1 pixel tall, we want it as 2456 tall x 1 wide
         frame = np.frombuffer(data, dtype=np.uint8).reshape((COLUMN_HEIGHT, COLUMN_WIDTH, CHANNELS))
         
-        # Transpose to make it vertical: (1, 2456, 3) -> (2456, 1, 3)
-        column = frame.transpose(1, 0, 2)
+        # Transpose to vertical and flip to correct 180-degree rotation: (1, 2456, 3) -> (2456, 1, 3) flipped
+        column = frame.transpose(1, 0, 2)[::-1]
 
         # Insert the single column into the rolling buffer at the current position
-        # This happens for EVERY received frame
+        # Rolling from right to left to correct horizontal flip
         rolling_buffer[:, current_column:current_column+1, :] = column
 
-        # Move to the next column position, wrapping around when reaching the end
-        current_column = (current_column + 1) % DISPLAY_WIDTH
+        # Move to the next column position (right to left), wrapping around when reaching the start
+        current_column = (current_column - 1) % DISPLAY_WIDTH
 
         # Display throttling: only refresh display at specified rate
         # This reduces cv2.imshow() / cv2.waitKey() overhead while keeping all data
@@ -184,12 +184,15 @@ while True:
                 should_display = False
         
         if should_display:
+            # Flip horizontally for display to correct orientation (using efficient slicing)
+            display_buffer = rolling_buffer[:, ::-1]
+            
             # Display the rolling buffer (clean, no overlays)
-            cv2.imshow("Rolling Column Stream", rolling_buffer)
+            cv2.imshow("Rolling Column Stream", display_buffer)
             
             # Write frame to video if recording
             if video_writer is not None:
-                video_writer.write(rolling_buffer)
+                video_writer.write(display_buffer)
 
             if cv2.waitKey(1) == 27:  # ESC to quit
                 break
