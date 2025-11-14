@@ -157,7 +157,14 @@ uv run analyze_sma.py output.csv
 - Statistical summary (min/max/mean/std)
 - Threshold recommendations based on percentiles
 - Standard deviation-based suggestions
-- Visualization plots (`output_analysis.png`)
+- Visualization plots saved to `results/debug/`
+- Archived CSV with timestamp in `results/debug/`
+
+**Output files are automatically organized:**
+- `results/debug/output_YYYYMMDD_HHMMSS.csv` - Archived CSV
+- `results/debug/output_analysis_YYYYMMDD_HHMMSS.png` - Analysis plots
+
+The `results/` directory is gitignored to keep your repository clean.
 
 ### Interpreting Results
 

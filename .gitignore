@@ -38,3 +38,5 @@ ipch/
 
 *.mkv
 *.raw
+gst_plugs/
+results/

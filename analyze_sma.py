@@ -18,10 +18,16 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
+from datetime import datetime
+import shutil
 
 
 def analyze_csv(csv_file: str = "output.csv"):
     """Analyze the rolling sum CSV data and generate insights."""
+    
+    # Create output directory
+    output_dir = Path("results/debug")
+    output_dir.mkdir(parents=True, exist_ok=True)
     
     # Read the CSV
     try:
@@ -29,6 +35,12 @@ def analyze_csv(csv_file: str = "output.csv"):
     except FileNotFoundError:
         print(f"Error: CSV file '{csv_file}' not found.")
         sys.exit(1)
+    
+    # Copy input CSV to results directory with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    csv_name = Path(csv_file).stem
+    archived_csv = output_dir / f"{csv_name}_{timestamp}.csv"
+    shutil.copy(csv_file, archived_csv)
     
     print("=" * 80)
     print(f"ROLLING SUM ANALYSIS - {csv_file}")
@@ -98,16 +110,17 @@ def analyze_csv(csv_file: str = "output.csv"):
         print()
     
     # Create visualizations
-    create_plots(df, csv_file)
+    plot_file = create_plots(df, csv_file, output_dir, timestamp)
     
     print("=" * 80)
-    print("PLOTS SAVED:")
-    print(f"  - {csv_file.replace('.csv', '_analysis.png')}")
+    print("OUTPUT FILES:")
+    print(f"  CSV Archive: {archived_csv}")
+    print(f"  Analysis Plot: {plot_file}")
     print("=" * 80)
 
 
-def create_plots(df: pd.DataFrame, csv_file: str):
-    """Create analysis plots."""
+def create_plots(df: pd.DataFrame, csv_file: str, output_dir: Path, timestamp: str) -> Path:
+    """Create analysis plots and return the output file path."""
     
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle(f'Rolling Sum Analysis - {csv_file}', fontsize=16, fontweight='bold')
@@ -167,10 +180,13 @@ def create_plots(df: pd.DataFrame, csv_file: str):
     
     plt.tight_layout()
     
-    # Save the plot
-    output_file = csv_file.replace('.csv', '_analysis.png')
+    # Save the plot to results/debug
+    csv_name = Path(csv_file).stem
+    output_file = output_dir / f"{csv_name}_analysis_{timestamp}.png"
     plt.savefig(output_file, dpi=150, bbox_inches='tight')
     print(f"\n✓ Saved analysis plot to: {output_file}\n")
+    
+    return output_file
 
 
 if __name__ == "__main__":
