@@ -49,6 +49,7 @@ gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.in
 ```
 
 ## Network Streaming
+see more at network_guide.md
 
 ### Sending Line Scan Data Over UDP
 

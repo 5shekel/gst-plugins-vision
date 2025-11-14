@@ -6,6 +6,11 @@
 #   "numpy",
 # ]
 # ///
+#
+# NOTE: For higher performance (200+ fps), see the Go implementation:
+#       scripts/go/main.go - Significantly faster, handles 200+ fps easily
+#       Build: Run scripts/build_go_receiver.ps1 (Windows) or scripts/build_go_receiver.sh (Linux/macOS)
+#       See scripts/go/README.md for setup instructions
 
 import socket
 import numpy as np
@@ -41,6 +46,8 @@ UDP_IP = "0.0.0.0"
 UDP_PORT = 5000
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16777216)  # 16MB buffer
+
 sock.bind((UDP_IP, UDP_PORT))
 
 print(f"Receiving raw {COLUMN_WIDTH}x{COLUMN_HEIGHT} RGB columns on UDP port {UDP_PORT}")
