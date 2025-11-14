@@ -22,6 +22,7 @@
 
 #include <gst/base/gstbasetransform.h>
 #include <gst/video/video.h>
+#include <stdio.h>
 
 G_BEGIN_DECLS
 
@@ -54,6 +55,7 @@ struct _GstRollingSum
   gint column_index;     /* Which column to analyze (0-based) */
   gint stride;           /* Row sampling stride */
   gdouble threshold;     /* Deviation threshold for dropping frames */
+  gchar *csv_filename;   /* CSV output filename (NULL = no CSV) */
 
   /* State */
   gdouble *ring_buffer;  /* Circular buffer of column means */
@@ -61,6 +63,7 @@ struct _GstRollingSum
   gint frame_count;      /* Total frames processed */
   gdouble rolling_mean;  /* Current rolling mean */
   gdouble rolling_sum;   /* Current rolling sum for efficient mean update */
+  FILE *csv_file;        /* CSV file handle */
   
   /* Video format info */
   GstVideoInfo video_info;

@@ -38,6 +38,7 @@
 #include "gstrollingsum.h"
 #include <string.h>
 #include <math.h>
+#include <stdio.h>
 
 enum
 {
@@ -46,6 +47,7 @@ enum
   PROP_COLUMN_INDEX,
   PROP_STRIDE,
   PROP_THRESHOLD,
+  PROP_CSV_FILENAME,
   PROP_LAST
 };
 
@@ -53,6 +55,7 @@ enum
 #define DEFAULT_PROP_COLUMN_INDEX 1
 #define DEFAULT_PROP_STRIDE 1
 #define DEFAULT_PROP_THRESHOLD 0.5
+#define DEFAULT_PROP_CSV_FILENAME NULL
 
 /* Supported video formats */
 #define SUPPORTED_CAPS \
@@ -108,6 +111,18 @@ gst_rolling_sum_dispose (GObject * object)
 
   GST_DEBUG ("dispose");
 
+  /* Close CSV file if open */
+  if (filter->csv_file) {
+    fclose (filter->csv_file);
+    filter->csv_file = NULL;
+  }
+
+  /* Free CSV filename */
+  if (filter->csv_filename) {
+    g_free (filter->csv_filename);
+    filter->csv_filename = NULL;
+  }
+
   gst_rolling_sum_reset (filter);
 
   /* chain up to the parent class */
@@ -161,6 +176,13 @@ gst_rolling_sum_class_init (GstRollingSumClass * klass)
           G_PARAM_STATIC_STRINGS | G_PARAM_READWRITE |
           GST_PARAM_MUTABLE_PLAYING));
 
+  g_object_class_install_property (gobject_class, PROP_CSV_FILENAME,
+      g_param_spec_string ("csv-file", "CSV File",
+          "Path to CSV file for logging frame data (NULL = no logging)",
+          DEFAULT_PROP_CSV_FILENAME,
+          G_PARAM_STATIC_STRINGS | G_PARAM_READWRITE |
+          GST_PARAM_MUTABLE_READY));
+
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_rolling_sum_sink_template));
   gst_element_class_add_pad_template (gstelement_class,
@@ -187,6 +209,7 @@ gst_rolling_sum_init (GstRollingSum * filter)
   filter->column_index = DEFAULT_PROP_COLUMN_INDEX;
   filter->stride = DEFAULT_PROP_STRIDE;
   filter->threshold = DEFAULT_PROP_THRESHOLD;
+  filter->csv_filename = NULL;
 
   filter->ring_buffer = NULL;
   filter->ring_index = 0;
@@ -194,6 +217,7 @@ gst_rolling_sum_init (GstRollingSum * filter)
   filter->rolling_mean = 0.0;
   filter->rolling_sum = 0.0;
   filter->info_set = FALSE;
+  filter->csv_file = NULL;
 
   gst_base_transform_set_in_place (GST_BASE_TRANSFORM (filter), TRUE);
 
@@ -228,6 +252,40 @@ gst_rolling_sum_set_property (GObject * object, guint prop_id,
     case PROP_THRESHOLD:
       filter->threshold = g_value_get_double (value);
       break;
+    case PROP_CSV_FILENAME:
+    {
+      const gchar *filename = g_value_get_string (value);
+      
+      /* Close old file if open */
+      if (filter->csv_file) {
+        fclose (filter->csv_file);
+        filter->csv_file = NULL;
+      }
+      
+      /* Free old filename */
+      if (filter->csv_filename) {
+        g_free (filter->csv_filename);
+        filter->csv_filename = NULL;
+      }
+      
+      /* Set new filename and open file */
+      if (filename && filename[0] != '\0') {
+        filter->csv_filename = g_strdup (filename);
+        filter->csv_file = fopen (filter->csv_filename, "w");
+        
+        if (filter->csv_file) {
+          /* Write CSV header */
+          fprintf (filter->csv_file, "frame,column_mean,rolling_mean,deviation,normalized_deviation,dropped\n");
+          fflush (filter->csv_file);
+          GST_INFO_OBJECT (filter, "Opened CSV file: %s", filter->csv_filename);
+        } else {
+          GST_ERROR_OBJECT (filter, "Failed to open CSV file: %s", filter->csv_filename);
+          g_free (filter->csv_filename);
+          filter->csv_filename = NULL;
+        }
+      }
+      break;
+    }
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -254,6 +312,9 @@ gst_rolling_sum_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_THRESHOLD:
       g_value_set_double (value, filter->threshold);
+      break;
+    case PROP_CSV_FILENAME:
+      g_value_set_string (value, filter->csv_filename);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -367,8 +428,12 @@ gst_rolling_sum_transform_ip (GstBaseTransform * trans, GstBuffer * buf)
   gdouble frame_mean, deviation, old_value;
   gint effective_window_size;
 
+  GST_DEBUG_OBJECT (filter, "transform_ip called, frame_count=%d", filter->frame_count);
+
   /* Extract column mean from current frame */
   frame_mean = gst_rolling_sum_extract_column_mean (filter, buf);
+  
+  GST_DEBUG_OBJECT (filter, "Extracted column mean: %.2f", frame_mean);
 
   /* Store in ring buffer */
   old_value = filter->ring_buffer[filter->ring_index];
@@ -395,7 +460,7 @@ gst_rolling_sum_transform_ip (GstBaseTransform * trans, GstBuffer * buf)
   /* Normalize deviation (assuming 8-bit equivalent range) */
   gdouble normalized_deviation = deviation / 255.0;
 
-  GST_LOG_OBJECT (filter,
+  GST_DEBUG_OBJECT (filter,
       "Frame %d: mean=%.2f, rolling_mean=%.2f, deviation=%.2f (normalized=%.4f)",
       filter->frame_count, frame_mean, filter->rolling_mean, deviation,
       normalized_deviation);
@@ -404,10 +469,23 @@ gst_rolling_sum_transform_ip (GstBaseTransform * trans, GstBuffer * buf)
   filter->ring_index = (filter->ring_index + 1) % filter->window_size;
 
   /* Decision: drop or pass frame */
+  gboolean dropped = FALSE;
   if (normalized_deviation > filter->threshold) {
     GST_DEBUG_OBJECT (filter,
         "Dropping frame %d: deviation %.4f > threshold %.4f",
         filter->frame_count, normalized_deviation, filter->threshold);
+    dropped = TRUE;
+  }
+
+  /* Write to CSV if file is open */
+  if (filter->csv_file) {
+    fprintf (filter->csv_file, "%d,%.6f,%.6f,%.6f,%.6f,%d\n",
+        filter->frame_count, frame_mean, filter->rolling_mean,
+        deviation, normalized_deviation, dropped ? 1 : 0);
+    fflush (filter->csv_file);
+  }
+
+  if (dropped) {
     return GST_BASE_TRANSFORM_FLOW_DROPPED;
   }
 
