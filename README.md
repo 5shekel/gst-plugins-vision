@@ -1,172 +1,122 @@
 # gst-plugins-vision
 
-GStreamer plugins related to the field of machine vision.
+GStreamer plugins for IDS uEye cameras with frame analysis capabilities.
 
-we only care for ids,
+## Supported Elements
 
-run using
-```
+### Image Acquisition
+- **idsueyesrc**: Video source for [IDS uEye cameras][1] (GigE Vision, USB 2/3, USB3 Vision)
+
+### Video Analysis
+- **rollingsum**: Drops frames based on rolling mean analysis of a single column. Analyzes pixel column deviation from rolling baseline to detect anomalies or changes in the scene.
+
+
+## Usage Examples
+
+### Basic capture from IDS uEye camera
+```bash
 gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! queue ! autovideosink
 ```
 
-drop frame if sum of image is bigger then 0.5
-```
+### Frame filtering based on column analysis
+Drop frames when column mean deviates from rolling baseline by more than 0.5:
+```bash
 gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=1000 column-index=1 threshold=0.5 ! queue ! autovideosink
 ```
 
 **Note:** The `rollingsum` element analyzes a single column of pixels and drops frames when the column mean deviates from the rolling mean baseline by more than the threshold. Use `videoconvert` to ensure proper format negotiation.
 
-Additional examples:
+### Additional rollingsum examples
+
+Analyze column 320 with larger window:
 ```bash
-# Analyze column 320 with larger window
 gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=5000 column-index=320 threshold=0.3 ! queue ! autovideosink
+```
 
-# Use stride for faster processing (sample every 2 rows)
+Use stride for faster processing (sample every 2 rows):
+```bash
 gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=1000 column-index=1 stride=2 threshold=0.5 ! queue ! autovideosink
+```
 
-# Lower threshold for more sensitive detection
+Lower threshold for more sensitive detection:
+```bash
 gst-launch-1.0 idsueyesrc config-file=whole-presacler64_autoexp-binningx2.ini ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum threshold=0.2 ! queue ! autovideosink
 ```
 
-
-## Image acquisition elements
-
-- aptinasrc: Video source for [Aptina Imaging (On Semiconductor) dev kits][14] (USB dev kits)
-- bitflowsrc: Video source for [BitFlow frame grabbers][10] (analog, Camera Link, CoaXPress)
-- edtpdvsrc: Video source for [EDT PDV frame grabbers][1] (Camera Link)
-- euresyssrc: Video source for [Euresys PICOLO, DOMINO and GRABLINK series frame grabbers][3] (analog, Camera Link)
-- idsueyesrc: Video source for [IDS uEye cameras][11] (GigE Vision, USB 2/3, USB3 Vision)
-- imperxflexsrc: Video source for [IMPERX FrameLink and FrameLink Express frame grabbers][5] (Camera Link)
-- imperxsdisrc: Video source for [IMPERX HD-SDI Express frame grabbers][15] (SDI, HD-SDI)
-- kayasrc: Video source for [KAYA Instruments frame grabbers][16] (Camera Link HS, CoaXPress, 10GigE Vision)
-- matroxsrc: Video source for [MATROX Imaging Library (MIL)][12] (analog, Camera Link, Camera Link HS, CoaXPress, DVI-D, FireWire, GigE Vision, SDI)
-- niimaqsrc: Video source for [National Instruments IMAQ frame grabbers][6] (analog, parallel digital, Camera Link)
-- niimaqdxsrc: Video source for [National Instruments IMAQdx library][7] (GigE Vision, FireWire, USB3 Vision)
-- phoenixsrc: Video source for [Active Silicon Phoenix frame grabbers][8] (HD-SDI, LVDS, Camera Link)
-- pixcisrc: Video source for [EPIX PIXCI frame grabbers][4] (analog, LVDS, Camera Link)
-- pleorasrc: Video source for [Pleora eBUS SDK devices][17] (GigE Vision, USB3 Vision)
-- pylonsrc: Video source for [Basler Pylon sources][20] (GigE Vision, USB3 Vision)
-- qcamsrc: Video source for [QImaging QCam cameras][21] (FireWire, discontinued)
-- saperasrc: Video source for [Teledyne DALSA frame grabbers][9] (analog, Camera Link, HSLink, LVDS)
-
-## Image generation elements
-
-- edtpdvsink: Video sink for [EDT PDV Camera Link simulator][2]
-- gigesimsink: Video sink for [A&B Soft GigESim][18] GigE Vision simulator
-- kayasink: Video sink for [KAYA Instruments CXP simulator][16]
-- pleorasink: Video sink for [Pleora eBUS SDK][19] GigE Vision transmitter
-
-## Other elements
-
-- extractcolor: Extract a single color channel
-- klvinjector: Inject test synchronous KLV metadata
-- klvinspector: Inspect synchronous KLV metadata
-- rollingsum: Drops frames based on rolling mean analysis of a single column
-- sfx3dnoise: Applies 3D noise to video
-- videolevels: Scales monochrome 8- or 16-bit video to 8-bit, via manual setpoints or AGC
-
-
 ## Dependencies
 
-- GStreamer 1.2.x or newer (1.8 needed for KLV)
-- Specific frame grabber SDKs and/or licenses
+- GStreamer 1.2.x or newer
+- IDS uEye SDK (for camera support)
 
-## Installation
+## Building on Windows
 
-- Install GStreamer 1.2.x or newer (1.8 needed for KLV)
-- Build project (see below) or download [a release from Github](https://github.com/joshdoe/gst-plugins-vision/releases) (ZIP files under Assets)
-- Extract files somewhere
-- Create an environment variable `GST_PLUGIN_PATH` that points to where you extracted the files
+### Quick Start with PowerShell Script
 
-## Examples
+The easiest way to build is using the provided PowerShell script:
 
-Capture from a CoaXPress camera via a Kaya Komodo frame grabber, apply AGC to convert it to 8-bit monochrome, then output the video via A&B Software GigESim which generates GigE Vision video:
-> `gst-launch-1.0 kayasrc ! videolevels auto=continuous ! gigesimsink`
+```powershell
+# Set the plugin installation path
+$env:GST_PLUGIN_PATH = "C:\path\to\your\plugins"
 
-Then in another command capture the GigE Vision video via Pleora eBUS and display the video to the screen:
-> `gst-launch-1.0 pleorasrc ! autovideoconvert ! autovideosink`
+# Build all plugins (IDS uEye + rollingsum) and auto-copy to GST_PLUGIN_PATH
+.\build.ps1
 
-## Compiling
+# Or build only IDS uEye plugin
+.\build.ps1 -BuildType IDSuEyeOnly
 
-### Windows
+# Debug build without auto-copy
+.\build.ps1 -Config Debug -NoCopy
 
-- Install [Git](https://git-scm.com/) or download a ZIP archive
-- Install [CMake](https://cmake.org/)
-- Install [GStreamer distribution](https://gstreamer.freedesktop.org/download/)
-  or build from source. The installer should set
-  the installation path via the `GSTREAMER_1_0_ROOT_X86_64` environment variable. If
-  not set, set the CMake variable `GSTREAMER_ROOT` to your installation, the directory
-  containing `bin` and `lib`
-- Install any camera or framegrabber software/SDK for those plugins you wish to
-  build. Check `cmake/modules` for any paths you may need to set.
-- Run the following commands from a terminal or command prompt, assuming CMake
-  and Git are in your `PATH`.
+# Custom GStreamer path
+.\build.ps1 -GStreamerRoot "C:\custom\gstreamer\path"
 ```
+
+For more options, see:
+```powershell
+Get-Help .\build.ps1 -Detailed
+```
+
+### Manual Build Process
+
+If you prefer to build manually:
+
+1. Install [CMake](https://cmake.org/)
+2. Install [GStreamer distribution](https://gstreamer.freedesktop.org/download/) (default path: `C:\bin\gstreamer\1.0\msvc_x86_64`)
+3. Install [IDS uEye SDK](https://www.ids-imaging.com) (default path: `C:\Program Files\IDS\uEye\Develop`)
+4. Run:
+
+```bash
 git clone https://github.com/joshdoe/gst-plugins-vision.git
 cd gst-plugins-vision
 mkdir build
 cd build
-cmake -G "Visual Studio 15 2017 Win64" ..
+cmake .. -G "Visual Studio 16 2019" -A x64 -DGSTREAMER_ROOT="C:\bin\gstreamer\1.0\msvc_x86_64"
+cmake --build . --config Release
 ```
 
-### Ubuntu
+### Installation
 
-Steps should be similar on other Linux distributions.
+The `build.ps1` script automatically copies plugins to `$env:GST_PLUGIN_PATH` if set. Alternatively:
 
-```
-apt-get install git cmake libgstreamer-plugins-base1.0-dev liborc-0.4-dev
-git clone https://github.com/joshdoe/gst-plugins-vision.git
-cd gst-plugins-vision
-mkdir build
-cd build
-cmake ..
-make
-```
+1. Set `GST_PLUGIN_PATH` environment variable to point to your plugin directory
+2. Copy the built DLLs manually:
+   - `build\sys\idsueye\Release\libgstidsueye.dll`
+   - `build\gst\rollingsum\Release\libgstrollingsum.dll`
 
-### Installation and packaging
+### Verify Installation
 
-To install plugins, first make sure you've set `CMAKE_INSTALL_PREFIX` properly,
-the default might not be desired (e.g., system path). For finer grained control
-you can set `PLUGIN_INSTALL_DIR` and related variables to specify exactly where
-you want to install plugins
-```
-cmake --build . --target INSTALL
-# or on Linux
-make install
-```
-- To create a package of all compiled plugins run:
-```
-cmake --build . --target PACKAGE
-# or on Linux
-make package
+```bash
+gst-inspect-1.0 idsueyesrc
+gst-inspect-1.0 rollingsum
 ```
 
-## KLV
+## Documentation
 
-KLV support is based on a GStreamer [merge request](https://gitlab.freedesktop.org/gstreamer/gst-plugins-base/-/merge_requests/124) that has yet to be merged, so it is included here in the klv library. By default KLV support is disabled. To enable it set the CMake flag `ENABLE_KLV`. This will create the klv plugin, and make the pleora plugin dependent on the klv library. You'll need to ensure `libgstklv-1.0-1.dll` is in the system `PATH` on Windows, or on Linux make sure `libgstklv-1.0-1.so` is in the `LD_LIBRARY_PATH`.
+- [IDS uEye Build Instructions](BUILD_IDSUEYE.md)
+- [Rolling Sum Filter Design](DESIGN_ROLLINGSUM.md)
 
-See also
---------
-- [Aravis][13], Linux open source GStreamer plugin for GigE Vision and USB3 Vision cameras
+## See Also
 
-[1]: http://www.edt.com/camera_link.html
-[2]: http://www.edt.com/pcidv_cls.html
-[3]: http://www.euresys.com/Products/FrameGrabber.asp
-[4]: http://www.epixinc.com/products/index.htm#divtab1
-[5]: http://www.imperx.com/framegrabbers
-[6]: http://sine.ni.com/nips/cds/view/p/lang/en/nid/1292
-[7]: http://sine.ni.com/nips/cds/view/p/lang/en/nid/12892
-[8]: http://www.activesilicon.com/products_fg_phx.htm
-[9]: https://www.teledynedalsa.com/imaging/products/fg/
-[10]: http://www.bitflow.com
-[11]: http://www.ids-imaging.com
-[12]: http://www.matrox.com/imaging
-[13]: https://github.com/AravisProject/aravis
-[14]: https://www.onsemi.com
-[15]: https://www.imperx.com/framegrabbers
-[16]: https://kayainstruments.com
-[17]: https://www.pleora.com
-[18]: http://www.ab-soft.com/gigesim.php
-[19]: https://www.pleora.com
-[20]: https://www.baslerweb.com/
-[21]: https://www.photometrics.com/qimaging
+- [Aravis](https://github.com/AravisProject/aravis) - Linux open source GStreamer plugin for GigE Vision and USB3 Vision cameras
+
+[1]: http://www.ids-imaging.com

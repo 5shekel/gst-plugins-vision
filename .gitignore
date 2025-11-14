@@ -35,3 +35,5 @@ _ReSharper*/
 *.sdf
 *.opensdf
 ipch/
+gst_plugs/libgstidsueye.dll
+gst_plugs/libgstrollingsum.dll
