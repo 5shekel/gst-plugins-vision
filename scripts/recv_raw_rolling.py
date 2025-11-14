@@ -24,8 +24,12 @@ from collections import deque
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description='Receive raw column stream via UDP')
-parser.add_argument('--no-display', action='store_true', 
+parser.add_argument('--no-display', action='store_true',
                     help='Disable OpenCV display for maximum performance (stats only)')
+parser.add_argument('--display-fps', type=int, default=0,
+                    help='Limit display refresh rate (0=every frame, 60=60fps, etc). Reduces cv2.imshow() overhead while receiving all frames')
+parser.add_argument('--save-mjpeg', type=str, default=None,
+                    help='Save rolling display to MJPEG video file (e.g., output.avi). Uses display-fps if set, otherwise 30 fps')
 args = parser.parse_args()
 
 # Import OpenCV only if display is enabled
@@ -43,12 +47,8 @@ DROP_THRESHOLD_MS = EXPECTED_INTERVAL_MS * 2.5  # Alert if gap > 2.5x expected (
 STATS_WINDOW_SIZE = 100  # Track stats over last N frames
 STATUS_INTERVAL = 100  # Print status every N frames
 
-# Rotation mode - set to rotate incoming data before display
-# Options: None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE, cv2.ROTATE_180
-if ENABLE_DISPLAY:
-    ROTATION = cv2.ROTATE_90_COUNTERCLOCKWISE  # Rotate rows to columns
-else:
-    ROTATION = None
+# OPTIMIZED: Using NumPy indexing instead of cv2.rotate() for better performance
+# Extracting first row and reversing it is equivalent to ROTATE_90_COUNTERCLOCKWISE + first column
 
 # Stream parameters (match your GStreamer sender)
 COLUMN_WIDTH = 4  # Width from 200fps-2456x4pix-cw.ini
@@ -70,7 +70,10 @@ sock.bind((UDP_IP, UDP_PORT))
 
 print(f"Receiving raw {COLUMN_WIDTH}x{COLUMN_HEIGHT} RGB columns on UDP port {UDP_PORT}")
 if ENABLE_DISPLAY:
-    print(f"Display: ENABLED - Rolling display ({DISPLAY_WIDTH}x{DISPLAY_HEIGHT})")
+    if args.display_fps > 0:
+        print(f"Display: ENABLED - Rolling display ({DISPLAY_WIDTH}x{DISPLAY_HEIGHT}) @ {args.display_fps} Hz (throttled)")
+    else:
+        print(f"Display: ENABLED - Rolling display ({DISPLAY_WIDTH}x{DISPLAY_HEIGHT}) @ full rate")
 else:
     print(f"Display: DISABLED - Stats only mode (max performance)")
 if DEBUG:
@@ -81,6 +84,24 @@ if ENABLE_DISPLAY:
     cv2.namedWindow("Rolling Column Stream", cv2.WINDOW_NORMAL)
     rolling_buffer = np.zeros((DISPLAY_HEIGHT, DISPLAY_WIDTH, CHANNELS), dtype=np.uint8)
     current_column = 0
+    
+    # Display throttling support
+    if args.display_fps > 0:
+        display_interval = 1.0 / args.display_fps  # seconds between display updates
+        last_display_time = 0
+    else:
+        display_interval = 0  # Update every frame
+        last_display_time = 0
+    
+    # MJPEG video writer setup
+    video_writer = None
+    if args.save_mjpeg:
+        # Use display-fps if set, otherwise default to 30 fps for video
+        video_fps = args.display_fps if args.display_fps > 0 else 30
+        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+        video_writer = cv2.VideoWriter(args.save_mjpeg, fourcc, video_fps,
+                                       (DISPLAY_WIDTH, DISPLAY_HEIGHT))
+        print(f"Recording to: {args.save_mjpeg} @ {video_fps} fps")
 
 frame_count = 0
 
@@ -134,32 +155,47 @@ while True:
         print(status)
 
     if ENABLE_DISPLAY:
-        # Parse the incoming data
+        # Parse the incoming data - ALWAYS process every frame
         frame = np.frombuffer(data, dtype=np.uint8).reshape((COLUMN_WIDTH, COLUMN_HEIGHT, CHANNELS))
         
-        # Apply rotation if configured
-        if ROTATION is not None:
-            rotated = cv2.rotate(frame, ROTATION)
-        else:
-            rotated = frame
-        
-        # Extract only the first column for smoother rolling (1 pixel/frame)
-        column = rotated[:, 0:1, :]
+        # OPTIMIZED: Extract first row and transpose to column (equivalent to rotating and taking first column)
+        # This avoids expensive cv2.rotate() - uses NumPy indexing instead
+        # For ROTATE_90_COUNTERCLOCKWISE: first column of rotated = first row reversed
+        column = frame[0, ::-1, :].reshape(COLUMN_HEIGHT, 1, CHANNELS)
 
         # Insert the single column into the rolling buffer at the current position
+        # This happens for EVERY received frame
         rolling_buffer[:, current_column:current_column+1, :] = column
 
         # Move to the next column position, wrapping around when reaching the end
         current_column = (current_column + 1) % DISPLAY_WIDTH
 
-        # Display the rolling buffer (clean, no overlays)
-        cv2.imshow("Rolling Column Stream", rolling_buffer)
+        # Display throttling: only refresh display at specified rate
+        # This reduces cv2.imshow() / cv2.waitKey() overhead while keeping all data
+        should_display = True
+        if args.display_fps > 0:
+            if current_time - last_display_time >= display_interval:
+                last_display_time = current_time
+                should_display = True
+            else:
+                should_display = False
+        
+        if should_display:
+            # Display the rolling buffer (clean, no overlays)
+            cv2.imshow("Rolling Column Stream", rolling_buffer)
+            
+            # Write frame to video if recording
+            if video_writer is not None:
+                video_writer.write(rolling_buffer)
 
-        if cv2.waitKey(1) == 27:  # ESC to quit
-            break
+            if cv2.waitKey(1) == 27:  # ESC to quit
+                break
     else:
         # No display mode - just validate the data can be reshaped
         frame = np.frombuffer(data, dtype=np.uint8).reshape((COLUMN_WIDTH, COLUMN_HEIGHT, CHANNELS))
 
 if ENABLE_DISPLAY:
+    if video_writer is not None:
+        video_writer.release()
+        print(f"Video saved: {args.save_mjpeg}")
     cv2.destroyAllWindows()
