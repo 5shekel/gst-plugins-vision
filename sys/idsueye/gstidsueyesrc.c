@@ -497,6 +497,12 @@ gst_idsueyesrc_start (GstBaseSrc * bsrc)
     SENSORINFO sInfo;
     ret = is_GetCameraInfo (src->hCam, &cInfo);
     ret = is_GetSensorInfo (src->hCam, &sInfo);
+    
+    /* Log sensor information for debugging AOI issues */
+    if (ret == IS_SUCCESS) {
+      GST_DEBUG_OBJECT (src, "Sensor: %s, max size: %dx%d",
+          sInfo.strSensorName, sInfo.nMaxWidth, sInfo.nMaxHeight);
+    }
   }
 
   if (strlen (src->config_file)) {
@@ -715,10 +721,20 @@ gst_idsueyesrc_create (GstPushSrc * psrc, GstBuffer ** buf)
   GST_LOG_OBJECT (src, "create");
 
   if (!src->is_started) {
+    /* Query and re-validate AOI configuration before starting capture.
+     * This is required when using AOI with Y offsets. */
+    IS_RECT rectAOI;
+    ret = is_AOI (src->hCam, IS_AOI_IMAGE_GET_AOI, (void *) &rectAOI,
+        sizeof (rectAOI));
+    if (ret == IS_SUCCESS) {
+      ret = is_AOI (src->hCam, IS_AOI_IMAGE_SET_AOI, (void *) &rectAOI,
+          sizeof (rectAOI));
+    }
+
     ret = is_CaptureVideo (src->hCam, IS_DONT_WAIT);
     if (ret != IS_SUCCESS) {
       GST_ELEMENT_ERROR (src, STREAM, WRONG_TYPE,
-          ("Failed to start video capture"), (NULL));
+          ("Failed to start video capture: %s", gst_idsueyesrc_get_error_string (src, ret)), (NULL));
       return GST_FLOW_ERROR;
     }
 
