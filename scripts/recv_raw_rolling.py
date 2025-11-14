@@ -40,25 +40,25 @@ if ENABLE_DISPLAY:
 # Debug flag - set to True to see frame reception details
 DEBUG = False
 
-# Line drop detection parameters
-EXPECTED_FPS = 200  # Expected frame rate (from 200fps ini file)
-EXPECTED_INTERVAL_MS = 1000.0 / EXPECTED_FPS  # 5ms for 200fps
-DROP_THRESHOLD_MS = EXPECTED_INTERVAL_MS * 2.5  # Alert if gap > 2.5x expected (12.5ms)
+# Frame statistics parameters
 STATS_WINDOW_SIZE = 100  # Track stats over last N frames
 STATUS_INTERVAL = 100  # Print status every N frames
+DROP_THRESHOLD_MULTIPLIER = 2.5  # Alert if gap > 2.5x rolling average
+MIN_SAMPLES_FOR_DROP_DETECTION = 10  # Need at least N samples to detect drops
 
 # OPTIMIZED: Using NumPy indexing instead of cv2.rotate() for better performance
 # Extracting first row and reversing it is equivalent to ROTATE_90_COUNTERCLOCKWISE + first column
 
 # Stream parameters (match your GStreamer sender)
-COLUMN_WIDTH = 4  # Width from 200fps-2456x4pix-cw.ini
-COLUMN_HEIGHT = 2456  # Height from 200fps-2456x4pix-cw.ini
+# Modified to receive single line: 2456x1 instead of 4x2456
+COLUMN_WIDTH = 2456  # One line width
+COLUMN_HEIGHT = 1     # One line height
 CHANNELS = 3
-FRAME_SIZE = COLUMN_WIDTH * COLUMN_HEIGHT * CHANNELS  # bytes (29472)
+FRAME_SIZE = COLUMN_WIDTH * COLUMN_HEIGHT * CHANNELS  # bytes (7368)
 
 # Display parameters
 DISPLAY_WIDTH = 800  # Width of rolling display in pixels
-DISPLAY_HEIGHT = COLUMN_HEIGHT
+DISPLAY_HEIGHT = COLUMN_WIDTH  # 2456 pixels tall (the line width becomes display height)
 
 UDP_IP = "0.0.0.0"
 UDP_PORT = 5000
@@ -68,7 +68,7 @@ sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16777216)  # 16MB buffer
 
 sock.bind((UDP_IP, UDP_PORT))
 
-print(f"Receiving raw {COLUMN_WIDTH}x{COLUMN_HEIGHT} RGB columns on UDP port {UDP_PORT}")
+print(f"Receiving raw {COLUMN_WIDTH}x{COLUMN_HEIGHT} BGR line on UDP port {UDP_PORT}")
 if ENABLE_DISPLAY:
     if args.display_fps > 0:
         print(f"Display: ENABLED - Rolling display ({DISPLAY_WIDTH}x{DISPLAY_HEIGHT}) @ {args.display_fps} Hz (throttled)")
@@ -125,15 +125,18 @@ while True:
     if first_frame_time is None:
         first_frame_time = current_time
     
-    # Line drop detection
+    # Frame interval tracking and drop detection
     if last_frame_time is not None:
         interval_ms = (current_time - last_frame_time) * 1000
         frame_intervals.append(interval_ms)
         
-        # Detect line drop
-        if interval_ms > DROP_THRESHOLD_MS:
-            total_drops += 1
-            drops_since_last_status += 1
+        # Detect drops based on rolling average (only after we have enough samples)
+        if len(frame_intervals) >= MIN_SAMPLES_FOR_DROP_DETECTION:
+            avg_interval = np.mean(frame_intervals)
+            drop_threshold = avg_interval * DROP_THRESHOLD_MULTIPLIER
+            if interval_ms > drop_threshold:
+                total_drops += 1
+                drops_since_last_status += 1
     
     last_frame_time = current_time
     frame_count += 1
@@ -156,12 +159,12 @@ while True:
 
     if ENABLE_DISPLAY:
         # Parse the incoming data - ALWAYS process every frame
-        frame = np.frombuffer(data, dtype=np.uint8).reshape((COLUMN_WIDTH, COLUMN_HEIGHT, CHANNELS))
+        # Receiving 2456x1 line directly - reshape as a vertical column
+        # Input is 2456 pixels wide x 1 pixel tall, we want it as 2456 tall x 1 wide
+        frame = np.frombuffer(data, dtype=np.uint8).reshape((COLUMN_HEIGHT, COLUMN_WIDTH, CHANNELS))
         
-        # OPTIMIZED: Extract first row and transpose to column (equivalent to rotating and taking first column)
-        # This avoids expensive cv2.rotate() - uses NumPy indexing instead
-        # For ROTATE_90_COUNTERCLOCKWISE: first column of rotated = first row reversed
-        column = frame[0, ::-1, :].reshape(COLUMN_HEIGHT, 1, CHANNELS)
+        # Transpose to make it vertical: (1, 2456, 3) -> (2456, 1, 3)
+        column = frame.transpose(1, 0, 2)
 
         # Insert the single column into the rolling buffer at the current position
         # This happens for EVERY received frame
@@ -192,7 +195,7 @@ while True:
                 break
     else:
         # No display mode - just validate the data can be reshaped
-        frame = np.frombuffer(data, dtype=np.uint8).reshape((COLUMN_WIDTH, COLUMN_HEIGHT, CHANNELS))
+        frame = np.frombuffer(data, dtype=np.uint8).reshape((COLUMN_HEIGHT, COLUMN_WIDTH, CHANNELS))
 
 if ENABLE_DISPLAY:
     if video_writer is not None:

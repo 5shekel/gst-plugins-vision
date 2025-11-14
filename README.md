@@ -49,30 +49,30 @@ gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.in
 ```
 
 ## Network Streaming
-see more at network_guide.md
 
-### Sending Line Scan Data Over UDP
+### Quick Start - Single Line Transmission (2456x1)
 
-#### Real Data Pipeline
-Send camera data as raw UDP stream (note: 5ms exposure is too fast):
+#### Send Single Line via UDP
+Extract and transmit one line from camera (daytime, 200fps):
 ```powershell
-gst-launch-1.0 idsueyesrc config-file=ini/200fps-2456x4pix-cw.ini exposure=5 framerate=300  `
+gst-launch-1.0 idsueyesrc config-file=ini/200fps-2456x4pix-cw.ini exposure=5 framerate=200 `
+    ! videocrop bottom=3 `
     ! queue `
     ! udpsink host=127.0.0.1 port=5000
 ```
 
-#### Python/OpenCV Receiver
-Receive and process raw column data:
+#### Receive and Display
 ```pwsh
-uv run scripts/recv_raw_column.py
+uv run .\scripts\recv_raw_rolling.py --display-fps 60
 ```
 
-Or with rolling analysis:
-```pwsh
-uv run .\scripts\recv_raw_rolling.py
-```
+**What's happening:**
+- Camera captures 2456x4 pixels at row 500 of the sensor
+- `videocrop bottom=3` extracts only the top line (2456x1)
+- 7368 bytes transmitted per frame (2456 × 1 × 3 BGR channels)
+- Receiver displays as a rolling vertical scan
 
-See [`scripts/recv_raw_column.py`](scripts/recv_raw_column.py) for the Python implementation with debug options.
+See [network_guide.md](network_guide.md) for detailed configuration options, nighttime settings, and recording.
 
 ### Demo/Test Data Streaming
 
