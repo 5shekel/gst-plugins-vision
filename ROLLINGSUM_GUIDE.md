@@ -1,8 +1,27 @@
-# GStreamer Rolling Sum Plugin Guide
+# GStreamer Rolling Sum Plugin - Complete Documentation
+
+## Table of Contents
+- [Overview](#overview)
+- [How It Works](#how-it-works)
+- [Architecture & Design](#architecture--design)
+- [Plugin Properties](#plugin-properties)
+- [Basic Usage](#basic-usage)
+- [Debugging](#debugging)
+- [CSV Analysis](#csv-analysis)
+- [Recommended Thresholds](#recommended-thresholds)
+- [Troubleshooting](#troubleshooting)
+- [Performance](#performance)
+- [Integration Examples](#integration-examples)
+- [Developer Guide](#developer-guide)
+- [References](#references)
 
 ## Overview
 
 The `rollingsum` plugin analyzes video frames in real-time by tracking the mean pixel intensity of a specific column across frames. It maintains a rolling window of these values and can drop frames that deviate significantly from the rolling mean, useful for detecting and filtering unstable or anomalous frames.
+
+**Element Name:** `rollingsum` - Transform element that analyzes pixel values and selectively drops frames
+
+**Purpose:** Monitor a vertical column of pixels in video frames, calculate the rolling mean over a time window, and drop frames when the current frame's column mean deviates significantly from the rolling mean baseline.
 
 ## How It Works
 
@@ -12,15 +31,134 @@ The `rollingsum` plugin analyzes video frames in real-time by tracking the mean 
 4. **Frame Filtering**: Optionally drops frames exceeding the deviation threshold
 5. **CSV Logging**: Records all frame statistics for analysis
 
+### Data Flow
+
+```mermaid
+graph TD
+    A[Video Frame] --> B[Extract Column]
+    B --> C[Calculate Column Mean]
+    C --> D[Store in Ring Buffer]
+    D --> E[Update Rolling Mean]
+    E --> F{Deviation > Threshold?}
+    F -->|Yes| G[DROP Frame]
+    F -->|No| H[PASS Frame]
+    C --> E
+    
+    style G fill:#ff6b6b
+    style H fill:#51cf66
+```
+
+### Ring Buffer Operation
+
+```mermaid
+graph LR
+    subgraph Ring Buffer
+        A[0] --> B[1]
+        B --> C[2]
+        C --> D[...]
+        D --> E[N-1]
+        E ---|wrap| A
+    end
+    
+    F[New Frame Mean] --> G[ring_index]
+    G --> A
+    
+    H[Rolling Mean] --> I[Sum all values]
+    I --> J[Divide by count]
+    
+    style G fill:#ffd43b
+```
+
+## Architecture & Design
+
+### Base Class
+- Inherits from `GstBaseTransform` (similar to [`select`](gst/select/gstselect.c))
+- In-place transform (analysis only, no frame modification)
+- Returns `GST_BASE_TRANSFORM_FLOW_DROPPED` to drop frames
+- Returns `GST_FLOW_OK` to pass frames
+
+### Element Structure
+
+```c
+struct _GstRollingSum
+{
+  GstBaseTransform element;
+  
+  /* Properties */
+  gint window_size;      // Number of frames in rolling window (default: 1000)
+  gint column_index;     // Which column to analyze (default: 1, second column)
+  gint stride;           // Row sampling stride (default: 1, every row)
+  gdouble threshold;     // Deviation threshold for dropping (default: 0.5)
+  gchar *csv_file;       // CSV output file path (default: NULL)
+  
+  /* State */
+  gdouble *ring_buffer;  // Circular buffer of column means
+  gint ring_index;       // Current position in ring buffer
+  gint frame_count;      // Total frames processed
+  gdouble rolling_mean;  // Current rolling mean
+  FILE *csv_fp;          // CSV file pointer
+};
+```
+
+### Algorithm (Simplified from cli.py)
+
+**Per Frame Processing:**
+
+1. **Extract column data:**
+   - Select column at column_index
+   - Sample every stride rows
+   - Calculate mean of sampled pixels: frame_mean
+   
+2. **Update ring buffer:**
+   - Store frame_mean in ring_buffer[ring_index]
+   - Increment ring_index (wrap around)
+   
+3. **Calculate rolling mean:**
+   - Sum values in ring buffer (up to window_size or frame_count)
+   - Divide by actual window size
+   
+4. **Calculate deviation:**
+   - deviation = abs(frame_mean - rolling_mean)
+   - normalized_deviation = deviation / 255.0 (for 8-bit video)
+   
+5. **Decision:**
+   - If normalized_deviation > threshold: DROP frame
+   - Else: PASS frame
+
+**Key Simplifications from cli.py:**
+- **No EMA tracking**: Use simple rolling mean instead of exponential moving average
+- **No variance tracking**: Use fixed threshold instead of dynamic variance-based detection
+- **No recording logic**: Just drop/pass, no buffering for output segments
+- **No patience mechanism**: Immediate decision per frame
+
+### Video Format Support
+
+**Initial Implementation:**
+- **Primary target**: Grayscale (GRAY8, GRAY16)
+- **Secondary**: Bayer formats (common in machine vision)
+
+**Caps Filter:**
+```c
+static GstStaticPadTemplate sink_template =
+  GST_STATIC_PAD_TEMPLATE ("sink",
+    GST_PAD_SINK,
+    GST_PAD_ALWAYS,
+    GST_STATIC_CAPS (
+      "video/x-raw, format=(string){GRAY8,GRAY16_LE,GRAY16_BE}; "
+      "video/x-bayer, format=(string){bggr,grbg,gbrg,rggb}"
+    )
+  );
+```
+
 ## Plugin Properties
 
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `window-size` | int | 1000 | Number of frames in rolling window (1-100000) |
-| `column-index` | int | 1 | Which vertical column to analyze (0-based) |
-| `stride` | int | 1 | Row sampling stride (1 = every row) |
-| `threshold` | double | 0.5 | Normalized deviation threshold for dropping frames (0.0-1.0) |
-| `csv-file` | string | NULL | Path to CSV file for logging (NULL = no logging) |
+| Property | Type | Default | Range | Description |
+|----------|------|---------|-------|-------------|
+| `window-size` | int | 1000 | 1-100000 | Number of frames in rolling window |
+| `column-index` | int | 1 | 0-width | Which vertical column to analyze (0-based) |
+| `stride` | int | 1 | 1-height | Row sampling stride (1 = every row) |
+| `threshold` | double | 0.5 | 0.0-1.0 | Normalized deviation threshold for dropping frames |
+| `csv-file` | string | NULL | - | Path to CSV file for logging (NULL = no logging) |
 
 ### Understanding Normalized Deviation
 
@@ -53,6 +191,25 @@ gst-launch-1.0 idsueyesrc config-file=config.ini exposure=0.5 ! `
   fakesink
 ```
 
+### Custom Configuration
+
+```powershell
+gst-launch-1.0 idsueyesrc config-file=config.ini ! `
+  rollingsum window-size=5000 column-index=320 stride=2 threshold=0.3 ! `
+  queue ! `
+  autovideosink
+```
+
+### With Format Conversion
+
+```powershell
+gst-launch-1.0 idsueyesrc ! `
+  videoconvert ! `
+  video/x-raw,format=GRAY8 ! `
+  rollingsum ! `
+  autovideosink
+```
+
 ## Debugging
 
 ### Enable Debug Output
@@ -75,11 +232,6 @@ set GST_DEBUG=rollingsum:5 && gst-launch-1.0 [pipeline...]
 
 ```bash
 GST_DEBUG=rollingsum:5 gst-launch-1.0 [pipeline...]
-```
-
-**PowerShell equivalent:**
-```powershell
-$env:GST_DEBUG="rollingsum:5"; gst-launch-1.0 [pipeline...]
 ```
 
 ### Debug Levels
@@ -264,12 +416,31 @@ WARNING rollingsum: Column index 1000 >= width 1224, using column 0
 - Choose different `column-index` (avoid edges)
 - Use `stride=2` or higher for faster processing
 
-## Performance Tips
+## Performance
+
+### Performance Tips
 
 1. **Larger window = more stable** but slower to adapt to scene changes
 2. **Stride > 1** reduces computation but less accurate column mean
 3. **CSV logging** has minimal performance impact
 4. **Debug level 5** can produce massive logs, use only when needed
+
+### Memory Usage
+
+- Ring buffer: `window_size * sizeof(double)` = ~8KB for default 1000 frames
+- Minimal per-frame allocation
+
+### CPU Usage
+
+- Column extraction: O(height/stride)
+- Rolling mean update: O(1) using incremental sum
+- Very lightweight compared to full-frame processing
+
+### Optimization Opportunities
+
+1. **Incremental mean**: Track sum instead of recalculating
+2. **SIMD**: Vectorize column summation
+3. **Skip calculation**: Only recalc every N frames if baseline is stable
 
 ## Integration Examples
 
@@ -310,7 +481,33 @@ recommended_threshold = df['normalized_deviation'].quantile(0.95)
 print(f"Recommended threshold: {recommended_threshold:.6f}")
 ```
 
-## Developer Notes
+## Developer Guide
+
+### Implementation Files
+
+**Directory Structure:**
+```
+gst/rollingsum/
+├── CMakeLists.txt
+├── gstrollingsum.c
+└── gstrollingsum.h
+```
+
+**gstrollingsum.h:**
+- Element type definitions
+- Structure declarations
+- Property enums
+- Function prototypes
+
+**gstrollingsum.c:**
+- GObject methods (init, dispose, get/set properties)
+- GstBaseTransform methods (transform_ip)
+- Helper functions (extract_column_mean, update_rolling_mean)
+- Plugin registration
+
+**CMakeLists.txt:**
+- Build configuration (copy from [`gst/select/CMakeLists.txt`](gst/select/CMakeLists.txt))
+- Link GStreamer base and video libraries
 
 ### Adding New Features
 
@@ -340,9 +537,70 @@ $env:GST_DEBUG="rollingsum:5"
 gst-launch-1.0 videotestsrc ! rollingsum ! fakesink
 ```
 
+### Testing Strategy
+
+**Unit Tests:**
+- Ring buffer wrapping
+- Mean calculation accuracy
+- Threshold comparison logic
+
+**Integration Tests:**
+- Pipeline with videotestsrc
+- Pipeline with idsueyesrc
+- Frame drop verification
+- Property changes during playback
+
+**Test Cases:**
+1. Static video (all frames similar) → all pass
+2. Single bright frame → that frame drops
+3. Gradual change → frames pass
+4. Periodic pattern → pattern frames drop
+
+### Integration with Existing Project
+
+**Build System:**
+Update [`gst/CMakeLists.txt`](gst/CMakeLists.txt):
+```cmake
+add_subdirectory (rollingsum)
+```
+
+**Documentation:**
+Update [`README.md`](README.md):
+- Add rollingsum to "Other elements" section
+- Add pipeline example
+
+### Future Enhancements
+
+**Phase 2 (If Needed):**
+- Add EMA baseline tracking (like cli.py)
+- Add variance-based thresholds
+- Support multiple columns or regions
+- Add metadata output (tag frames with deviation values)
+- RGB format support (analyze specific channel)
+
+**Phase 3 (Advanced):**
+- Full cli.py recording logic
+- Buffer and output segments
+- Integration with probe detection systems
+
+### Implementation Checklist
+
+- [x] Create gst/rollingsum directory
+- [x] Implement gstrollingsum.h
+- [x] Implement gstrollingsum.c
+- [x] Create CMakeLists.txt
+- [x] Update gst/CMakeLists.txt
+- [x] Build and test basic functionality
+- [x] Test with idsueyesrc
+- [x] Update README.md
+- [x] Create feature branch
+- [x] Commit and document
+
 ## References
 
-- [DESIGN_ROLLINGSUM.md](DESIGN_ROLLINGSUM.md) - Design document
+- Original algorithm: `cli.py` lines 64-79 (column extraction and mean comparison)
+- Template element: [`gst/select/gstselect.c`](gst/select/gstselect.c)
+- GStreamer base transform: [GstBaseTransform documentation](https://gstreamer.freedesktop.org/documentation/base/gstbasetransform.html)
 - [analyze_sma.py](analyze_sma.py) - Analysis tool
 - GStreamer documentation: https://gstreamer.freedesktop.org/documentation/
 
