@@ -11,12 +11,27 @@
 #       scripts/go/main.go - Significantly faster, handles 200+ fps easily
 #       Build: Run scripts/build_go_receiver.ps1 (Windows) or scripts/build_go_receiver.sh (Linux/macOS)
 #       See scripts/go/README.md for setup instructions
+#
+# Usage:
+#   python recv_raw_rolling.py              # With OpenCV display (default)
+#   python recv_raw_rolling.py --no-display # Stats only, no display (max performance)
 
 import socket
 import numpy as np
-import cv2
 import time
+import argparse
 from collections import deque
+
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description='Receive raw column stream via UDP')
+parser.add_argument('--no-display', action='store_true', 
+                    help='Disable OpenCV display for maximum performance (stats only)')
+args = parser.parse_args()
+
+# Import OpenCV only if display is enabled
+ENABLE_DISPLAY = not args.no_display
+if ENABLE_DISPLAY:
+    import cv2
 
 # Debug flag - set to True to see frame reception details
 DEBUG = False
@@ -30,7 +45,10 @@ STATUS_INTERVAL = 100  # Print status every N frames
 
 # Rotation mode - set to rotate incoming data before display
 # Options: None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE, cv2.ROTATE_180
-ROTATION = cv2.ROTATE_90_COUNTERCLOCKWISE  # Rotate rows to columns
+if ENABLE_DISPLAY:
+    ROTATION = cv2.ROTATE_90_COUNTERCLOCKWISE  # Rotate rows to columns
+else:
+    ROTATION = None
 
 # Stream parameters (match your GStreamer sender)
 COLUMN_WIDTH = 4  # Width from 200fps-2456x4pix-cw.ini
@@ -51,15 +69,19 @@ sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16777216)  # 16MB buffer
 sock.bind((UDP_IP, UDP_PORT))
 
 print(f"Receiving raw {COLUMN_WIDTH}x{COLUMN_HEIGHT} RGB columns on UDP port {UDP_PORT}")
-print(f"Display width: {DISPLAY_WIDTH} pixels (rolling)")
+if ENABLE_DISPLAY:
+    print(f"Display: ENABLED - Rolling display ({DISPLAY_WIDTH}x{DISPLAY_HEIGHT})")
+else:
+    print(f"Display: DISABLED - Stats only mode (max performance)")
 if DEBUG:
     print(f"Expected frame size: {FRAME_SIZE} bytes")
 
-cv2.namedWindow("Rolling Column Stream", cv2.WINDOW_NORMAL)
+# Initialize display if enabled
+if ENABLE_DISPLAY:
+    cv2.namedWindow("Rolling Column Stream", cv2.WINDOW_NORMAL)
+    rolling_buffer = np.zeros((DISPLAY_HEIGHT, DISPLAY_WIDTH, CHANNELS), dtype=np.uint8)
+    current_column = 0
 
-# Initialize the rolling buffer
-rolling_buffer = np.zeros((DISPLAY_HEIGHT, DISPLAY_WIDTH, CHANNELS), dtype=np.uint8)
-current_column = 0
 frame_count = 0
 
 # Line drop detection state
@@ -111,28 +133,33 @@ while True:
         
         print(status)
 
-    # Parse the incoming data
-    frame = np.frombuffer(data, dtype=np.uint8).reshape((COLUMN_WIDTH, COLUMN_HEIGHT, CHANNELS))
-    
-    # Apply rotation if configured
-    if ROTATION is not None:
-        rotated = cv2.rotate(frame, ROTATION)
+    if ENABLE_DISPLAY:
+        # Parse the incoming data
+        frame = np.frombuffer(data, dtype=np.uint8).reshape((COLUMN_WIDTH, COLUMN_HEIGHT, CHANNELS))
+        
+        # Apply rotation if configured
+        if ROTATION is not None:
+            rotated = cv2.rotate(frame, ROTATION)
+        else:
+            rotated = frame
+        
+        # Extract only the first column for smoother rolling (1 pixel/frame)
+        column = rotated[:, 0:1, :]
+
+        # Insert the single column into the rolling buffer at the current position
+        rolling_buffer[:, current_column:current_column+1, :] = column
+
+        # Move to the next column position, wrapping around when reaching the end
+        current_column = (current_column + 1) % DISPLAY_WIDTH
+
+        # Display the rolling buffer (clean, no overlays)
+        cv2.imshow("Rolling Column Stream", rolling_buffer)
+
+        if cv2.waitKey(1) == 27:  # ESC to quit
+            break
     else:
-        rotated = frame
-    
-    # Extract only the first column for smoother rolling (1 pixel/frame)
-    column = rotated[:, 0:1, :]
+        # No display mode - just validate the data can be reshaped
+        frame = np.frombuffer(data, dtype=np.uint8).reshape((COLUMN_WIDTH, COLUMN_HEIGHT, CHANNELS))
 
-    # Insert the single column into the rolling buffer at the current position
-    rolling_buffer[:, current_column:current_column+1, :] = column
-
-    # Move to the next column position, wrapping around when reaching the end
-    current_column = (current_column + 1) % DISPLAY_WIDTH
-
-    # Display the rolling buffer (clean, no overlays)
-    cv2.imshow("Rolling Column Stream", rolling_buffer)
-
-    if cv2.waitKey(1) == 27:  # ESC to quit
-        break
-
-cv2.destroyAllWindows()
+if ENABLE_DISPLAY:
+    cv2.destroyAllWindows()
