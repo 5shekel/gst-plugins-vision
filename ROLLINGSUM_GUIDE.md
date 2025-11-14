@@ -307,7 +307,7 @@ frame,column_mean,rolling_mean,deviation,normalized_deviation,dropped
 Use the included analysis script:
 
 ```powershell
-uv run analyze_sma.py output.csv
+uv run scripts/analyze_sma.py output.csv
 ```
 
 **Output includes:**
@@ -376,7 +376,7 @@ window-size=50 threshold=0.0002
 
 **Solution**:
 1. Run with CSV logging
-2. Analyze with `uv run analyze_sma.py output.csv`
+2. Analyze with `uv run scripts/analyze_sma.py output.csv`
 3. Use recommended threshold from 90th-99th percentile
 
 ### Too many frames dropped (threshold too low)
@@ -464,7 +464,7 @@ subprocess.run([
 ])
 
 # Analyze results
-subprocess.run(['uv', 'run', 'analyze_sma.py', 'output.csv'])
+subprocess.run(['uv', 'run', 'scripts/analyze_sma.py', 'output.csv'])
 ```
 
 ### Adaptive Threshold
@@ -601,7 +601,7 @@ Update [`README.md`](README.md):
 - Original algorithm: `cli.py` lines 64-79 (column extraction and mean comparison)
 - Template element: [`gst/select/gstselect.c`](gst/select/gstselect.c)
 - GStreamer base transform: [GstBaseTransform documentation](https://gstreamer.freedesktop.org/documentation/base/gstbasetransform.html)
-- [analyze_sma.py](analyze_sma.py) - Analysis tool
+- [scripts/analyze_sma.py](scripts/analyze_sma.py) - Analysis tool
 - GStreamer documentation: https://gstreamer.freedesktop.org/documentation/
 
 ## Support
