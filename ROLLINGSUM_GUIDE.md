@@ -35,21 +35,21 @@ The `rollingsum` plugin analyzes video frames in real-time by tracking the mean 
 
 ### Simple Pipeline
 
-```bash
-gst-launch-1.0 idsueyesrc config-file=config.ini ! \
-  videoconvert ! \
-  video/x-raw,format=GRAY8 ! \
-  rollingsum window-size=1000 column-index=1 threshold=0.0002 ! \
+```powershell
+gst-launch-1.0 idsueyesrc config-file=config.ini ! `
+  videoconvert ! `
+  video/x-raw,format=GRAY8 ! `
+  rollingsum window-size=1000 column-index=1 threshold=0.0002 ! `
   autovideosink
 ```
 
 ### With CSV Logging
 
-```bash
-gst-launch-1.0 idsueyesrc config-file=config.ini exposure=0.5 ! \
-  videoconvert ! \
-  video/x-raw,format=GRAY8 ! \
-  rollingsum window-size=1000 column-index=1 threshold=0.0002 csv-file=output.csv ! \
+```powershell
+gst-launch-1.0 idsueyesrc config-file=config.ini exposure=0.5 ! `
+  videoconvert ! `
+  video/x-raw,format=GRAY8 ! `
+  rollingsum window-size=1000 column-index=1 threshold=0.0002 csv-file=output.csv ! `
   fakesink
 ```
 
@@ -75,6 +75,11 @@ set GST_DEBUG=rollingsum:5 && gst-launch-1.0 [pipeline...]
 
 ```bash
 GST_DEBUG=rollingsum:5 gst-launch-1.0 [pipeline...]
+```
+
+**PowerShell equivalent:**
+```powershell
+$env:GST_DEBUG="rollingsum:5"; gst-launch-1.0 [pipeline...]
 ```
 
 ### Debug Levels
@@ -105,7 +110,7 @@ GST_DEBUG=rollingsum:5 gst-launch-1.0 [pipeline...]
 
 #### 1. Verify Plugin Loaded
 
-```bash
+```powershell
 gst-inspect-1.0 rollingsum
 ```
 
@@ -149,7 +154,7 @@ frame,column_mean,rolling_mean,deviation,normalized_deviation,dropped
 
 Use the included analysis script:
 
-```bash
+```powershell
 uv run analyze_sma.py output.csv
 ```
 
@@ -183,7 +188,7 @@ Based on analysis of stable camera footage:
 
 ### For General Use
 
-```bash
+```powershell
 # Conservative (1-2% frame drop)
 threshold=0.0003
 
@@ -197,17 +202,17 @@ threshold=0.0001
 ### For Specific Scenarios
 
 **High-speed acquisition** (minimal processing):
-```bash
+```powershell
 window-size=100 threshold=0.0005
 ```
 
 **Quality-focused** (stable scenes):
-```bash
+```powershell
 window-size=1000 threshold=0.0001
 ```
 
 **Real-time monitoring** (fast response):
-```bash
+```powershell
 window-size=50 threshold=0.0002
 ```
 
@@ -316,14 +321,17 @@ Key files:
 
 ### Rebuild After Changes
 
-```bash
+```powershell
 .\build.ps1  # Windows
+```
+
+```bash
 ./build.sh   # Linux
 ```
 
 ### Testing
 
-```bash
+```powershell
 # Quick test
 gst-inspect-1.0 rollingsum
 
@@ -341,7 +349,7 @@ gst-launch-1.0 videotestsrc ! rollingsum ! fakesink
 ## Support
 
 For issues or questions:
-1. Enable debug output (`GST_DEBUG=rollingsum:5`)
+1. Enable debug output (`$env:GST_DEBUG="rollingsum:5"` in PowerShell)
 2. Generate CSV log and analyze
 3. Check this guide's troubleshooting section
 4. Review debug output for errors/warnings
