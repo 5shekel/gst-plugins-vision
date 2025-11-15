@@ -100,7 +100,7 @@ struct _GstRollingSum
 };
 ```
 
-### Algorithm (Simplified from cli.py)
+### Algorithm (Simplified from wissotsky's cli.py)
 
 **Per Frame Processing:**
 
