@@ -62,9 +62,9 @@ SET_EXPOSURE <value>
 ```
 
 **Parameters**:
-- `<value>`: Exposure time in seconds (float)
-  - Range: 0.001 to 1.0 seconds (1ms to 1000ms)
-  - Examples: `0.016` (16ms), `0.001` (1ms), `0.100` (100ms)
+- `<value>`: Exposure time in milliseconds (float)
+  - Range: 1.0 to 1000.0 milliseconds
+  - Examples: `16` (16ms), `1` (1ms), `100` (100ms)
 
 **Response**:
 ```
@@ -77,11 +77,11 @@ ERROR <error_message>
 
 **Examples**:
 ```
-Client: SET_EXPOSURE 0.016\n
-Server: OK 0.016\n
+Client: SET_EXPOSURE 16\n
+Server: OK 16\n
 
-Client: SET_EXPOSURE 2.0\n
-Server: ERROR Value out of range (0.001-1.0)\n
+Client: SET_EXPOSURE 2000\n
+Server: ERROR Value out of range (1.0-1000.0)\n
 ```
 
 ### 2. GET_EXPOSURE
@@ -103,7 +103,7 @@ OK <current_value>
 **Example**:
 ```
 Client: GET_EXPOSURE\n
-Server: OK 0.016\n
+Server: OK 16\n
 ```
 
 ### 3. SET_FRAMERATE
@@ -176,7 +176,7 @@ OK exposure=<value> framerate=<value> state=<PLAYING|PAUSED|NULL>
 **Example**:
 ```
 Client: STATUS\n
-Server: OK exposure=0.016 framerate=22.0 state=PLAYING\n
+Server: OK exposure=16 framerate=22.0 state=PLAYING\n
 ```
 
 ## Error Handling
@@ -192,7 +192,7 @@ ERROR <error_code>: <error_message>
 |------|-------------|---------|
 | `INVALID_COMMAND` | Unknown command | `ERROR INVALID_COMMAND: Unknown command 'FOO'` |
 | `INVALID_SYNTAX` | Malformed command | `ERROR INVALID_SYNTAX: Missing parameter` |
-| `OUT_OF_RANGE` | Value out of valid range | `ERROR OUT_OF_RANGE: Exposure must be 0.001-1.0` |
+| `OUT_OF_RANGE` | Value out of valid range | `ERROR OUT_OF_RANGE: Exposure must be 1.0-1000.0` |
 | `PIPELINE_ERROR` | Pipeline not running | `ERROR PIPELINE_ERROR: Pipeline not in PLAYING state` |
 
 ## Implementation Notes
@@ -227,7 +227,7 @@ def send_command(command):
     return response.decode().strip()
 
 # Set exposure to 10ms
-print(send_command("SET_EXPOSURE 0.010"))
+print(send_command("SET_EXPOSURE 10"))
 
 # Get current exposure
 print(send_command("GET_EXPOSURE"))
@@ -239,7 +239,7 @@ print(send_command("SET_FRAMERATE 30"))
 ### Command Line (netcat/nc)
 ```bash
 # Set exposure
-echo "SET_EXPOSURE 0.020" | nc -u 127.0.0.1 5001
+echo "SET_EXPOSURE 20" | nc -u 127.0.0.1 5001
 
 # Get exposure
 echo "GET_EXPOSURE" | nc -u 127.0.0.1 5001
@@ -254,7 +254,7 @@ $udpClient = New-Object System.Net.Sockets.UdpClient
 $endpoint = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse("127.0.0.1"), 5001)
 
 # Send command
-$bytes = [System.Text.Encoding]::ASCII.GetBytes("SET_EXPOSURE 0.015`n")
+$bytes = [System.Text.Encoding]::ASCII.GetBytes("SET_EXPOSURE 15`n")
 $udpClient.Send($bytes, $bytes.Length, $endpoint)
 
 # Receive response

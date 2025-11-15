@@ -31,23 +31,6 @@ gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.in
 
 **Note:** The `rollingsum` element analyzes a single column of pixels and drops frames when the column mean deviates from the rolling mean baseline by more than the threshold. Use `videoconvert` to ensure proper format negotiation.
 
-### Additional rollingsum examples
-
-Analyze column 320 with larger window:
-```powershell
-gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=5000 column-index=320 threshold=0.3 ! queue ! autovideosink
-```
-
-Use stride for faster processing (sample every 2 rows):
-```powershell
-gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=1000 column-index=1 stride=2 threshold=0.5 ! queue ! autovideosink
-```
-
-Lower threshold for more sensitive detection:
-```powershell
-gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum threshold=0.2 ! queue ! autovideosink
-```
-
 ## Network Streaming
 
 ### Quick Start - Single Line Transmission (2456x1)
@@ -55,7 +38,7 @@ gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.in
 #### Send Single Line via UDP
 Extract and transmit one line from camera (daytime, 200fps):
 ```powershell
-gst-launch-1.0 idsueyesrc config-file=ini/200fps-2456x4pix-cw.ini exposure=5 framerate=200 `
+gst-launch-1.0 idsueyesrc config-file=ini/100fps-10exp-2456x4pix-500top-cw-extragain.ini  exposure=5 framerate=200 `
     ! videocrop bottom=3 `
     ! queue `
     ! udpsink host=127.0.0.1 port=5000

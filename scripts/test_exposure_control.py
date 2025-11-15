@@ -77,8 +77,8 @@ def main():
     time.sleep(0.2)
     
     # Test 2: Set exposure to 10ms
-    response = send_command("SET_EXPOSURE 0.110")
-    print_test(2, "Set exposure to 10ms", "SET_EXPOSURE 0.010", response)
+    response = send_command("SET_EXPOSURE 10")
+    print_test(2, "Set exposure to 10ms", "SET_EXPOSURE 10", response)
     time.sleep(5.2)
     
     # Test 3: Verify exposure was set
@@ -87,8 +87,8 @@ def main():
     time.sleep(0.2)
     
     # Test 4: Set exposure to 20ms
-    response = send_command("SET_EXPOSURE 0.020")
-    print_test(4, "Set exposure to 20ms", "SET_EXPOSURE 0.020", response)
+    response = send_command("SET_EXPOSURE 20")
+    print_test(4, "Set exposure to 20ms", "SET_EXPOSURE 20", response)
     time.sleep(0.2)
     
     # Test 5: Get framerate
@@ -117,13 +117,13 @@ def main():
     time.sleep(0.2)
     
     # Test 10: Out of range exposure (too high)
-    response = send_command("SET_EXPOSURE 5.0")
-    print_test(10, "Out of range exposure (5.0s)", "SET_EXPOSURE 5.0", response)
+    response = send_command("SET_EXPOSURE 5000")
+    print_test(10, "Out of range exposure (5000ms)", "SET_EXPOSURE 5000", response)
     time.sleep(0.2)
     
     # Test 11: Out of range exposure (too low)
-    response = send_command("SET_EXPOSURE 0.0001")
-    print_test(11, "Out of range exposure (0.1ms)", "SET_EXPOSURE 0.0001", response)
+    response = send_command("SET_EXPOSURE 0.1")
+    print_test(11, "Out of range exposure (0.1ms)", "SET_EXPOSURE 0.1", response)
     time.sleep(0.2)
     
     # Test 12: Invalid syntax (missing parameter)
@@ -137,8 +137,8 @@ def main():
     time.sleep(0.2)
     
     # Test 14: Restore original exposure (16ms)
-    response = send_command("SET_EXPOSURE 0.016")
-    print_test(14, "Restore exposure to 16ms", "SET_EXPOSURE 0.016", response)
+    response = send_command("SET_EXPOSURE 16")
+    print_test(14, "Restore exposure to 16ms", "SET_EXPOSURE 16", response)
     time.sleep(0.2)
     
     # Test 15: Restore original framerate (22 fps)
@@ -150,7 +150,7 @@ def main():
     print("Test completed!")
     print()
     print("Quick reference:")
-    print("  echo 'SET_EXPOSURE 0.010' | nc -u 127.0.0.1 5001")
+    print("  echo 'SET_EXPOSURE 10' | nc -u 127.0.0.1 5001")
     print("  echo 'GET_EXPOSURE' | nc -u 127.0.0.1 5001")
     print("  echo 'STATUS' | nc -u 127.0.0.1 5001")
     print("=" * 70)

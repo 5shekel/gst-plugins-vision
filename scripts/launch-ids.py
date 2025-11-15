@@ -16,18 +16,18 @@
 # Features:
 #   - Video streaming on UDP port 5000 (127.0.0.1)
 #   - Control interface on UDP port 5001 (0.0.0.0)
-#   - Dynamic exposure control (0.001-1.0 seconds)
+#   - Dynamic exposure control (1.0-1000.0 milliseconds)
 #   - Dynamic framerate control (1-500 fps)
 #
 # Control Commands:
-#   SET_EXPOSURE <value>  - Set exposure in seconds (e.g., 0.016)
+#   SET_EXPOSURE <value>  - Set exposure in milliseconds (e.g., 16)
 #   GET_EXPOSURE          - Get current exposure value
 #   SET_FRAMERATE <value> - Set framerate in Hz (e.g., 30)
 #   GET_FRAMERATE         - Get current framerate
 #   STATUS                - Get pipeline status and current settings
 #
 # Example Usage:
-#   echo "SET_EXPOSURE 0.010" | nc -u 127.0.0.1 5001
+#   echo "SET_EXPOSURE 10" | nc -u 127.0.0.1 5001
 #   echo "GET_EXPOSURE" | nc -u 127.0.0.1 5001
 #
 # Testing:
@@ -171,8 +171,8 @@ class ControlServer:
         
         try:
             value = float(parts[1])
-            if value < 0.001 or value > 1.0:
-                return "ERROR OUT_OF_RANGE: Exposure must be 0.001-1.0 seconds"
+            if value < 1.0 or value > 1000.0:
+                return "ERROR OUT_OF_RANGE: Exposure must be 1.0-1000.0 milliseconds"
             
             self.src.set_property("exposure", value)
             # Verify the value was set
@@ -250,11 +250,11 @@ pipeline = Gst.Pipeline()
 src = Gst.ElementFactory.make("idsueyesrc", "src")
 src.set_property("config-file", "ini/100fps-10exp-2456x4pix-500top-cw-extragain.ini")
 
-# Exposure in seconds (e.g., 0.016)
-src.set_property("exposure", 0.016)
+# Exposure in milliseconds (e.g., 10)
+src.set_property("exposure", 10)
 
 # Frame rate
-src.set_property("framerate", 22)
+src.set_property("framerate", 750)
 
 # Video crop to remove bottom 3 pixels
 videocrop = Gst.ElementFactory.make("videocrop", "crop")
