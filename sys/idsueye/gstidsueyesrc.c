@@ -498,16 +498,60 @@ gst_idsueyesrc_start (GstBaseSrc * bsrc)
   /* Use device-id if set (non-zero), otherwise use camera-id */
   if (src->device_id != 0) {
     src->hCam = (src->device_id) | IS_USE_DEVICE_ID;
+    GST_INFO_OBJECT (src, "Attempting to open camera with device-id=%d (handle=0x%x)",
+        src->device_id, src->hCam);
   } else {
     src->hCam = src->camera_id;
+    GST_INFO_OBJECT (src, "Attempting to open camera with camera-id=%d (handle=0x%x)",
+        src->camera_id, src->hCam);
   }
+  
   ret = is_InitCamera (&src->hCam, NULL);
   if (ret != IS_SUCCESS) {
-    GST_ELEMENT_ERROR (src, RESOURCE, FAILED,
-        ("Failed to initialize camera: %s",
-            gst_idsueyesrc_get_error_string (src, ret)), (NULL));
+    /* Build comprehensive error message */
+    gchar error_msg[1024];
+    const gchar *error_str = NULL;
+    
+    /* Get descriptive error from our mapping */
+    switch (ret) {
+      case IS_CANT_OPEN_DEVICE:
+        error_str = "Cannot open device - check if camera is connected and not in use";
+        break;
+      case IS_INVALID_DEVICE_ID:
+        error_str = "Invalid device ID - check device-id parameter";
+        break;
+      case IS_INVALID_CAMERA_HANDLE:
+        error_str = "Invalid camera handle";
+        break;
+      case IS_CAMERA_NOT_CONNECTED:
+        error_str = "Camera not connected";
+        break;
+      case IS_ALL_DEVICES_BUSY:
+        error_str = "All devices are busy - close other applications using the camera";
+        break;
+      case IS_NO_HARDWARE_INSTALLED:
+        error_str = "No hardware installed";
+        break;
+      case IS_SENSOR_INITIALIZATION_FAILED:
+        error_str = "Sensor initialization failed - check power and connections";
+        break;
+      default:
+        error_str = gst_idsueyesrc_get_error_string (src, ret);
+        break;
+    }
+    
+    g_snprintf (error_msg, sizeof(error_msg),
+        "Failed to initialize camera (error code %d): %s. "
+        "Camera/Device ID used: %d, Available cameras: %d",
+        ret, error_str,
+        src->device_id != 0 ? src->device_id : src->camera_id,
+        numCameras);
+    
+    GST_ELEMENT_ERROR (src, RESOURCE, FAILED, ("%s", error_msg), (NULL));
     return FALSE;
   }
+  
+  GST_INFO_OBJECT (src, "Successfully initialized camera handle 0x%x", src->hCam);
 
   {
     /* has cam ID,  type, date, version, ser no */
@@ -873,10 +917,140 @@ gst_idsueyesrc_set_framerate_exposure (GstIdsueyeSrc * src)
 gchar *
 gst_idsueyesrc_get_error_string (GstIdsueyeSrc * src, INT error_num)
 {
-  INT err = error_num;
-  IS_CHAR *err_string;
-  is_GetError (src->hCam, &err, &err_string);
-  return err_string;
+  static gchar error_buffer[512];
+  const gchar *error_name = NULL;
+  const gchar *error_desc = NULL;
+
+  /* Map IDS error codes to human-readable strings */
+  switch (error_num) {
+    case IS_NO_SUCCESS:
+      error_name = "IS_NO_SUCCESS";
+      error_desc = "Function call failed";
+      break;
+    case IS_SUCCESS:
+      error_name = "IS_SUCCESS";
+      error_desc = "Function call succeeded";
+      break;
+    case IS_INVALID_CAMERA_HANDLE:
+      error_name = "IS_INVALID_CAMERA_HANDLE";
+      error_desc = "Camera handle is not valid or zero";
+      break;
+    case IS_IO_REQUEST_FAILED:
+      error_name = "IS_IO_REQUEST_FAILED";
+      error_desc = "An I/O request to the driver failed";
+      break;
+    case IS_CANT_OPEN_DEVICE:
+      error_name = "IS_CANT_OPEN_DEVICE";
+      error_desc = "Cannot open device (returned by is_InitCamera)";
+      break;
+    case IS_CANT_CLOSE_DEVICE:
+      error_name = "IS_CANT_CLOSE_DEVICE";
+      error_desc = "Cannot close device";
+      break;
+    case IS_CANT_SETUP_MEMORY:
+      error_name = "IS_CANT_SETUP_MEMORY";
+      error_desc = "Cannot setup memory";
+      break;
+    case IS_NO_HWND_FOR_ERROR_REPORT:
+      error_name = "IS_NO_HWND_FOR_ERROR_REPORT";
+      error_desc = "No window handle for error report";
+      break;
+    case IS_ERROR_MESSAGE_NOT_CREATED:
+      error_name = "IS_ERROR_MESSAGE_NOT_CREATED";
+      error_desc = "Error message not created";
+      break;
+    case IS_ERROR_STRING_NOT_FOUND:
+      error_name = "IS_ERROR_STRING_NOT_FOUND";
+      error_desc = "Error string not found";
+      break;
+    case IS_INVALID_PARAMETER:
+      error_name = "IS_INVALID_PARAMETER";
+      error_desc = "A parameter specified was invalid";
+      break;
+    case IS_OUT_OF_MEMORY:
+      error_name = "IS_OUT_OF_MEMORY";
+      error_desc = "Out of memory";
+      break;
+    case IS_INVALID_DEVICE_ID:
+      error_name = "IS_INVALID_DEVICE_ID";
+      error_desc = "Invalid device ID";
+      break;
+    case IS_ALL_DEVICES_BUSY:
+      error_name = "IS_ALL_DEVICES_BUSY";
+      error_desc = "All devices are busy";
+      break;
+    case IS_TIMED_OUT:
+      error_name = "IS_TIMED_OUT";
+      error_desc = "Timeout occurred";
+      break;
+    case IS_NO_USB20:
+      error_name = "IS_NO_USB20";
+      error_desc = "USB port doesn't support USB 2.0";
+      break;
+    case IS_CAPTURE_RUNNING:
+      error_name = "IS_CAPTURE_RUNNING";
+      error_desc = "There is already a capture running";
+      break;
+    case IS_CAMERA_NOT_CONNECTED:
+      error_name = "IS_CAMERA_NOT_CONNECTED";
+      error_desc = "Camera is not connected";
+      break;
+    case IS_SEQUENCE_LIST_EMPTY:
+      error_name = "IS_SEQUENCE_LIST_EMPTY";
+      error_desc = "Sequence list is empty";
+      break;
+    case IS_CANT_ADD_TO_SEQUENCE:
+      error_name = "IS_CANT_ADD_TO_SEQUENCE";
+      error_desc = "Cannot add to sequence";
+      break;
+    case IS_NO_IMAGE_MEM_ALLOCATED:
+      error_name = "IS_NO_IMAGE_MEM_ALLOCATED";
+      error_desc = "No image memory allocated";
+      break;
+    case IS_NO_HARDWARE_INSTALLED:
+      error_name = "IS_NO_HARDWARE_INSTALLED";
+      error_desc = "No hardware installed";
+      break;
+    case IS_TRANSFER_ERROR:
+      error_name = "IS_TRANSFER_ERROR";
+      error_desc = "Transfer failed";
+      break;
+    case IS_INVALID_CAMERA_TYPE:
+      error_name = "IS_INVALID_CAMERA_TYPE";
+      error_desc = "The camera type in the ini file doesn't match";
+      break;
+    case IS_INVALID_EXPOSURE_TIME:
+      error_name = "IS_INVALID_EXPOSURE_TIME";
+      error_desc = "Invalid exposure time";
+      break;
+    case IS_DEVICE_BUSY:
+      error_name = "IS_DEVICE_BUSY";
+      error_desc = "The device is busy. Operation must be executed again later";
+      break;
+    case IS_SENSOR_INITIALIZATION_FAILED:
+      error_name = "IS_SENSOR_INITIALIZATION_FAILED";
+      error_desc = "The sensor initialization failed";
+      break;
+    default:
+      /* Try to get error string from SDK, but with validation */
+      if (src->hCam != 0) {
+        INT err = error_num;
+        IS_CHAR *err_string = NULL;
+        INT result = is_GetError (src->hCam, &err, &err_string);
+        if (result == IS_SUCCESS && err_string != NULL) {
+          g_snprintf (error_buffer, sizeof(error_buffer),
+              "Error %d: %s", error_num, err_string);
+          return error_buffer;
+        }
+      }
+      error_name = "UNKNOWN_ERROR";
+      error_desc = "Unknown error code";
+      break;
+  }
+
+  g_snprintf (error_buffer, sizeof(error_buffer), "%s (%d): %s",
+      error_name, error_num, error_desc);
+  return error_buffer;
 }
 
 
