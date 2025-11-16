@@ -10,18 +10,18 @@ client for UDP camera control
 Usage:
   uv run scripts/camera_control.py                    # Get all camera settings (default)
   uv run scripts/camera_control.py get-all            # Get all camera settings
-  uv run scripts/camera_control.py get-exposure       # Get current exposure
-  uv run scripts/camera_control.py set-exposure 10    # Set exposure to 10ms
-  uv run scripts/camera_control.py get-framerate      # Get current framerate
-  uv run scripts/camera_control.py set-framerate 30   # Set framerate to 30fps
-  uv run scripts/camera_control.py get-gain           # Get current gain
-  uv run scripts/camera_control.py set-gain 50        # Set gain to 50
-  uv run scripts/camera_control.py get-auto-exposure  # Get auto-exposure status
-  uv run scripts/camera_control.py set-auto-exposure 1 # Enable auto-exposure
-  uv run scripts/camera_control.py get-auto-gain      # Get auto-gain status
-  uv run scripts/camera_control.py set-auto-gain 1    # Enable auto-gain
-  uv run scripts/camera_control.py get-gain-boost     # Get gain boost status
-  uv run scripts/camera_control.py set-gain-boost 1   # Enable gain boost
+  uv run scripts/camera_control.py exposure           # Get current exposure
+  uv run scripts/camera_control.py exposure 10        # Set exposure to 10ms
+  uv run scripts/camera_control.py framerate          # Get current framerate
+  uv run scripts/camera_control.py framerate 30       # Set framerate to 30fps
+  uv run scripts/camera_control.py gain               # Get current gain
+  uv run scripts/camera_control.py gain 50            # Set gain to 50
+  uv run scripts/camera_control.py auto-exposure      # Get auto-exposure status
+  uv run scripts/camera_control.py auto-exposure 1    # Enable auto-exposure
+  uv run scripts/camera_control.py auto-gain          # Get auto-gain status
+  uv run scripts/camera_control.py auto-gain 1        # Enable auto-gain
+  uv run scripts/camera_control.py gain-boost         # Get gain boost status
+  uv run scripts/camera_control.py gain-boost 1       # Enable gain boost
   uv run scripts/camera_control.py status             # Get pipeline status
 
 This script provides control commands
@@ -60,10 +60,10 @@ def send_command(command, host="127.0.0.1", port=5001, timeout=1.0):
         sock.close()
 
 
-def simple_command(command, description="Command"):
+def simple_command(command, description="Command", host="127.0.0.1", port=5001, timeout=1.0):
     """Execute a single command and print the result"""
     print(f"{description}...")
-    response = send_command(command)
+    response = send_command(command, host, port, timeout)
     print(f"Response: {response}")
     
     # Check if response indicates success
@@ -76,7 +76,7 @@ def simple_command(command, description="Command"):
         print(f"Unknown response: {response}")
         return False
 
-def get_all_settings():
+def get_all_settings(host="127.0.0.1", port=5001, timeout=1.0):
     """Get all camera settings"""
     print("=" * 70)
     print("Camera Settings")
@@ -94,7 +94,7 @@ def get_all_settings():
     
     all_success = True
     for name, command in settings:
-        response = send_command(command)
+        response = send_command(command, host, port, timeout)
         print(f"{name:20s}: {response}")
         if response.startswith("ERROR"):
             all_success = False
@@ -105,50 +105,54 @@ def get_all_settings():
 def main():
     """Main function with argument parsing"""
     parser = argparse.ArgumentParser(
-        description="UDP Exposure Control Client",
+        description="UDP Camera Control Client",
         epilog="""
 Examples:
   %(prog)s                                 # Get all camera settings (default)
   %(prog)s get-all                         # Get all camera settings
-  %(prog)s get-exposure                    # Get current exposure
-  %(prog)s set-exposure 10                 # Set exposure to 10ms
-  %(prog)s get-framerate                   # Get current framerate
-  %(prog)s set-framerate 30                # Set framerate to 30fps
-  %(prog)s get-gain                        # Get current gain
-  %(prog)s set-gain 50                     # Set gain to 50
-  %(prog)s get-auto-exposure               # Get auto-exposure status
-  %(prog)s set-auto-exposure 1             # Enable auto-exposure
-  %(prog)s get-auto-gain                   # Get auto-gain status
-  %(prog)s set-auto-gain 1                 # Enable auto-gain
-  %(prog)s get-gain-boost                  # Get gain boost status
-  %(prog)s set-gain-boost 1                # Enable gain boost
+  %(prog)s exposure                        # Get current exposure
+  %(prog)s exposure 10                     # Set exposure to 10ms
+  %(prog)s framerate                       # Get current framerate
+  %(prog)s framerate 30                    # Set framerate to 30fps
+  %(prog)s gain                            # Get current gain
+  %(prog)s gain 50                         # Set gain to 50
+  %(prog)s auto-exposure                   # Get auto-exposure status
+  %(prog)s auto-exposure 1                 # Enable auto-exposure
+  %(prog)s auto-gain                       # Get auto-gain status
+  %(prog)s auto-gain 1                     # Enable auto-gain
+  %(prog)s gain-boost                      # Get gain boost status
+  %(prog)s gain-boost 1                    # Enable gain boost
   %(prog)s status                          # Get pipeline status
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
-    parser.add_argument('command',
+    parser.add_argument('property',
                         nargs='?',
-                        choices=['get-all', 'get-exposure', 'get-exposure-range', 'set-exposure',
-                                'get-framerate', 'set-framerate', 'get-gain', 'set-gain',
-                                'get-auto-exposure', 'set-auto-exposure',
-                                'get-auto-gain', 'set-auto-gain',
-                                'get-gain-boost', 'set-gain-boost', 'status'],
-                        help='Command to execute')
+                        choices=['get-all', 'exposure', 'framerate', 'gain',
+                                'auto-exposure', 'auto-gain', 'gain-boost', 'status'],
+                        help='Property to get or set')
     
     parser.add_argument('value',
                         nargs='?',
-                        type=float,
-                        help='Value for set commands (exposure in ms, framerate in fps)')
+                        help='Value to set (if not provided, gets current value)')
     
     parser.add_argument('--host',
                         default='127.0.0.1',
+                        metavar='IP',
                         help='Host address (default: 127.0.0.1)')
     
     parser.add_argument('--port',
                         type=int,
                         default=5001,
+                        metavar='PORT',
                         help='Port number (default: 5001)')
+    
+    parser.add_argument('--timeout',
+                        type=float,
+                        default=1.0,
+                        metavar='SECONDS',
+                        help='Timeout for UDP requests in seconds (default: 1.0)')
     
     # Enable tab completion if argcomplete is available
     if argcomplete:
@@ -156,104 +160,131 @@ Examples:
     
     args = parser.parse_args()
     
-    # If no command provided, run get-all by default
-    if args.command is None:
-        success = get_all_settings()
+    # If no property provided, run get-all by default
+    if args.property is None:
+        success = get_all_settings(host=args.host, port=args.port, timeout=args.timeout)
         sys.exit(0 if success else 1)
     
+    # Handle special commands
+    if args.property == 'get-all':
+        success = get_all_settings(host=args.host, port=args.port, timeout=args.timeout)
+    elif args.property == 'status':
+        success = simple_command("STATUS", "Getting pipeline status",
+                                host=args.host, port=args.port, timeout=args.timeout)
     
-    # Handle individual commands
-    if args.command == 'get-all':
-        success = get_all_settings()
-        
-    elif args.command == 'get-exposure':
-        success = simple_command("GET_EXPOSURE", "Getting current exposure")
-        
-    elif args.command == 'get-exposure-range':
-        success = simple_command("GET_EXPOSURE_RANGE", "Getting exposure range")
-        
-    elif args.command == 'set-exposure':
+    # Handle property-based commands
+    elif args.property == 'exposure':
         if args.value is None:
-            print("Error: set-exposure requires a value (exposure in milliseconds)")
-            parser.print_help()
-            sys.exit(1)
-        success = simple_command(f"SET_EXPOSURE {args.value}", f"Setting exposure to {args.value}ms")
-        
-    elif args.command == 'get-framerate':
-        success = simple_command("GET_FRAMERATE", "Getting current framerate")
-        
-    elif args.command == 'set-framerate':
+            # Get exposure
+            success = simple_command("GET_EXPOSURE", "Getting current exposure",
+                                    host=args.host, port=args.port, timeout=args.timeout)
+        else:
+            # Set exposure
+            try:
+                exposure_value = float(args.value)
+                success = simple_command(f"SET_EXPOSURE {exposure_value}",
+                                       f"Setting exposure to {exposure_value}ms",
+                                       host=args.host, port=args.port, timeout=args.timeout)
+            except ValueError:
+                print(f"Error: Invalid exposure value '{args.value}'. Must be a number.")
+                sys.exit(1)
+    
+    elif args.property == 'framerate':
         if args.value is None:
-            print("Error: set-framerate requires a value (framerate in fps)")
-            parser.print_help()
-            sys.exit(1)
-        success = simple_command(f"SET_FRAMERATE {args.value}", f"Setting framerate to {args.value}fps")
-        
-    elif args.command == 'get-gain':
-        success = simple_command("GET_GAIN", "Getting current gain")
-        
-    elif args.command == 'set-gain':
+            # Get framerate
+            success = simple_command("GET_FRAMERATE", "Getting current framerate",
+                                    host=args.host, port=args.port, timeout=args.timeout)
+        else:
+            # Set framerate
+            try:
+                framerate_value = float(args.value)
+                success = simple_command(f"SET_FRAMERATE {framerate_value}",
+                                       f"Setting framerate to {framerate_value}fps",
+                                       host=args.host, port=args.port, timeout=args.timeout)
+            except ValueError:
+                print(f"Error: Invalid framerate value '{args.value}'. Must be a number.")
+                sys.exit(1)
+    
+    elif args.property == 'gain':
         if args.value is None:
-            print("Error: set-gain requires a value (0-100, 0 for auto)")
-            parser.print_help()
-            sys.exit(1)
-        # Convert to int for gain
-        gain_value = int(args.value)
-        if gain_value < 0 or gain_value > 100:
-            print("Error: Gain must be between 0 and 100 (0 for auto)")
-            sys.exit(1)
-        success = simple_command(f"SET_GAIN {gain_value}", f"Setting gain to {gain_value}")
-        
-    elif args.command == 'get-auto-exposure':
-        success = simple_command("GET_AUTO_EXPOSURE", "Getting auto-exposure status")
-        
-    elif args.command == 'set-auto-exposure':
+            # Get gain
+            success = simple_command("GET_GAIN", "Getting current gain",
+                                    host=args.host, port=args.port, timeout=args.timeout)
+        else:
+            # Set gain
+            try:
+                gain_value = int(float(args.value))
+                if gain_value < 0 or gain_value > 100:
+                    print("Error: Gain must be between 0 and 100 (0 for auto)")
+                    sys.exit(1)
+                success = simple_command(f"SET_GAIN {gain_value}",
+                                       f"Setting gain to {gain_value}",
+                                       host=args.host, port=args.port, timeout=args.timeout)
+            except ValueError:
+                print(f"Error: Invalid gain value '{args.value}'. Must be a number 0-100.")
+                sys.exit(1)
+    
+    elif args.property == 'auto-exposure':
         if args.value is None:
-            print("Error: set-auto-exposure requires a value (0=off, 1=on)")
-            parser.print_help()
-            sys.exit(1)
-        # Convert to int
-        ae_value = int(args.value)
-        if ae_value not in [0, 1]:
-            print("Error: Auto-exposure must be 0 (off) or 1 (on)")
-            sys.exit(1)
-        success = simple_command(f"SET_AUTO_EXPOSURE {ae_value}",
-                                f"{'Enabling' if ae_value else 'Disabling'} auto-exposure")
-        
-    elif args.command == 'get-auto-gain':
-        success = simple_command("GET_AUTO_GAIN", "Getting auto-gain status")
-        
-    elif args.command == 'set-auto-gain':
+            # Get auto-exposure
+            success = simple_command("GET_AUTO_EXPOSURE", "Getting auto-exposure status",
+                                    host=args.host, port=args.port, timeout=args.timeout)
+        else:
+            # Set auto-exposure
+            try:
+                ae_value = int(float(args.value))
+                if ae_value not in [0, 1]:
+                    print("Error: Auto-exposure must be 0 (off) or 1 (on)")
+                    sys.exit(1)
+                success = simple_command(f"SET_AUTO_EXPOSURE {ae_value}",
+                                       f"{'Enabling' if ae_value else 'Disabling'} auto-exposure",
+                                       host=args.host, port=args.port, timeout=args.timeout)
+            except ValueError:
+                print(f"Error: Invalid auto-exposure value '{args.value}'. Must be 0 or 1.")
+                sys.exit(1)
+    
+    elif args.property == 'auto-gain':
         if args.value is None:
-            print("Error: set-auto-gain requires a value (0=off, 1=on)")
-            parser.print_help()
-            sys.exit(1)
-        # Convert to int
-        ag_value = int(args.value)
-        if ag_value not in [0, 1]:
-            print("Error: Auto-gain must be 0 (off) or 1 (on)")
-            sys.exit(1)
-        success = simple_command(f"SET_AUTO_GAIN {ag_value}",
-                                f"{'Enabling' if ag_value else 'Disabling'} auto-gain")
-        
-    elif args.command == 'get-gain-boost':
-        success = simple_command("GET_GAIN_BOOST", "Getting gain boost status")
-        
-    elif args.command == 'set-gain-boost':
+            # Get auto-gain
+            success = simple_command("GET_AUTO_GAIN", "Getting auto-gain status",
+                                    host=args.host, port=args.port, timeout=args.timeout)
+        else:
+            # Set auto-gain
+            try:
+                ag_value = int(float(args.value))
+                if ag_value not in [0, 1]:
+                    print("Error: Auto-gain must be 0 (off) or 1 (on)")
+                    sys.exit(1)
+                success = simple_command(f"SET_AUTO_GAIN {ag_value}",
+                                       f"{'Enabling' if ag_value else 'Disabling'} auto-gain",
+                                       host=args.host, port=args.port, timeout=args.timeout)
+            except ValueError:
+                print(f"Error: Invalid auto-gain value '{args.value}'. Must be 0 or 1.")
+                sys.exit(1)
+    
+    elif args.property == 'gain-boost':
         if args.value is None:
-            print("Error: set-gain-boost requires a value (0=off, 1=on)")
-            parser.print_help()
-            sys.exit(1)
-        # Convert to int
-        gb_value = int(args.value)
-        if gb_value not in [0, 1]:
-            print("Error: Gain boost must be 0 (off) or 1 (on)")
-            sys.exit(1)
-        success = simple_command(f"SET_GAIN_BOOST {gb_value}",
-                                f"{'Enabling' if gb_value else 'Disabling'} gain boost")
-        
-    elif args.command == 'status':
-        success = simple_command("STATUS", "Getting pipeline status")
+            # Get gain-boost
+            success = simple_command("GET_GAIN_BOOST", "Getting gain boost status",
+                                    host=args.host, port=args.port, timeout=args.timeout)
+        else:
+            # Set gain-boost
+            try:
+                gb_value = int(float(args.value))
+                if gb_value not in [0, 1]:
+                    print("Error: Gain boost must be 0 (off) or 1 (on)")
+                    sys.exit(1)
+                success = simple_command(f"SET_GAIN_BOOST {gb_value}",
+                                       f"{'Enabling' if gb_value else 'Disabling'} gain boost",
+                                       host=args.host, port=args.port, timeout=args.timeout)
+            except ValueError:
+                print(f"Error: Invalid gain boost value '{args.value}'. Must be 0 or 1.")
+                sys.exit(1)
+    
+    else:
+        print(f"Error: Unknown property '{args.property}'")
+        parser.print_help()
+        sys.exit(1)
     
     # Exit with appropriate code
     sys.exit(0 if success else 1)

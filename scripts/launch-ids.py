@@ -17,7 +17,10 @@
 # Basic Usage:
 #   uv run .\scripts\launch-ids.py                    # Use all defaults
 #   uv run .\scripts\launch-ids.py --help             # Show all options
-#   uv run .\scripts\launch-ids.py -e 16 -f 30        # Set exposure & framerate
+#   uv run .\scripts\launch-ids.py exposure 16        # Set exposure to 16ms (simplified)
+#   uv run .\scripts\launch-ids.py framerate 30       # Set framerate to 30fps (simplified)
+#   uv run .\scripts\launch-ids.py gain 50            # Set gain to 50 (simplified)
+#   uv run .\scripts\launch-ids.py -e 16 -f 30        # Set exposure & framerate (traditional)
 #   uv run .\scripts\launch-ids.py --port 6000        # Custom streaming port
 #   uv run .\scripts\launch-ids.py --no-crop --quiet  # No cropping, minimal output
 #   uv run .\scripts\launch-ids.py --display          # Enable 1/4 sized preview window
@@ -493,7 +496,10 @@ def parse_arguments():
         epilog="""
 Examples:
   %(prog)s                                    # Use all defaults
-  %(prog)s --exposure 16 --framerate 30      # Basic video settings
+  %(prog)s exposure 16                        # Set exposure to 16ms
+  %(prog)s framerate 30                       # Set framerate to 30fps
+  %(prog)s gain 50                            # Set gain to 50
+  %(prog)s --exposure 16 --framerate 30      # Traditional flag syntax
   %(prog)s --config custom.ini --port 6000   # Custom config and streaming port
   %(prog)s --host 192.168.1.100 --no-crop   # Stream to remote host without cropping
   %(prog)s --control-port 6001 --verbose     # Custom control port with verbose output
@@ -501,6 +507,16 @@ Examples:
         """,
         add_help=True
     )
+    
+    # Add positional arguments for simplified syntax
+    parser.add_argument('property',
+                        nargs='?',
+                        choices=['exposure', 'framerate', 'gain', 'auto-exposure', 'auto-gain', 'gain-boost'],
+                        help='Camera property to set (simplified syntax)')
+    
+    parser.add_argument('value',
+                        nargs='?',
+                        help='Value to set for the property (simplified syntax)')
     
     # Camera configuration
     camera_group = parser.add_argument_group('Camera Settings')
@@ -635,6 +651,44 @@ Examples:
     argcomplete.autocomplete(parser)
     
     args = parser.parse_args()
+    
+    # Handle simplified syntax (positional arguments)
+    if args.property and args.value:
+        try:
+            if args.property == 'exposure':
+                exposure_val = float(args.value)
+                if args.exposure is not None:
+                    parser.error("Cannot specify exposure with both simplified syntax and --exposure flag")
+                args.exposure = exposure_val
+            elif args.property == 'framerate':
+                framerate_val = float(args.value)
+                if args.framerate is not None:
+                    parser.error("Cannot specify framerate with both simplified syntax and --framerate flag")
+                args.framerate = framerate_val
+            elif args.property == 'gain':
+                gain_val = int(float(args.value))
+                if args.gain is not None:
+                    parser.error("Cannot specify gain with both simplified syntax and --gain flag")
+                args.gain = gain_val
+            elif args.property == 'auto-exposure':
+                ae_val = int(float(args.value))
+                if ae_val not in [0, 1]:
+                    parser.error("Auto-exposure value must be 0 (off) or 1 (on)")
+                args.auto_exposure = bool(ae_val)
+            elif args.property == 'auto-gain':
+                ag_val = int(float(args.value))
+                if ag_val not in [0, 1]:
+                    parser.error("Auto-gain value must be 0 (off) or 1 (on)")
+                args.auto_gain = bool(ag_val)
+            elif args.property == 'gain-boost':
+                gb_val = int(float(args.value))
+                if gb_val not in [0, 1]:
+                    parser.error("Gain-boost value must be 0 (off) or 1 (on)")
+                args.gain_boost = bool(gb_val)
+        except ValueError:
+            parser.error(f"Invalid value '{args.value}' for property '{args.property}'")
+    elif args.property and not args.value:
+        parser.error(f"Property '{args.property}' requires a value")
     
     # Validation - only validate if provided
     if args.exposure is not None and (args.exposure < 0.015 or args.exposure > 30000):
