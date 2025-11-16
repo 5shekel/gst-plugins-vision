@@ -334,10 +334,40 @@ gst_idsueyesrc_get_property (GObject * object, guint property_id,
       g_value_set_int (value, src->timeout);
       break;
     case PROP_EXPOSURE:
-      g_value_set_double (value, src->exposure);
+      if (src->is_started && src->hCam) {
+        double current_exposure = 0.0;
+        INT ret = is_Exposure (src->hCam, IS_EXPOSURE_CMD_GET_EXPOSURE,
+            &current_exposure, sizeof(double));
+        if (ret == IS_SUCCESS) {
+          /* Update cached value to match hardware state */
+          src->exposure = current_exposure;
+          g_value_set_double (value, current_exposure);
+        } else {
+          GST_WARNING_OBJECT (src, "Failed to query exposure (error %d), returning cached value",
+              ret);
+          g_value_set_double (value, src->exposure);
+        }
+      } else {
+        g_value_set_double (value, src->exposure);
+      }
       break;
     case PROP_FRAMERATE:
-      g_value_set_double (value, src->framerate);
+      if (src->is_started && src->hCam) {
+        double current_fps = 0.0;
+        /* Query current framerate by calling is_SetFrameRate with IS_GET_FRAMERATE */
+        INT ret = is_SetFrameRate (src->hCam, IS_GET_FRAMERATE, &current_fps);
+        if (ret == IS_SUCCESS) {
+          /* Update cached value to match hardware state */
+          src->framerate = current_fps;
+          g_value_set_double (value, current_fps);
+        } else {
+          GST_WARNING_OBJECT (src, "Failed to query framerate (error %d), returning cached value",
+              ret);
+          g_value_set_double (value, src->framerate);
+        }
+      } else {
+        g_value_set_double (value, src->framerate);
+      }
       break;
     case PROP_GAIN:
       g_value_set_int (value, src->gain);
