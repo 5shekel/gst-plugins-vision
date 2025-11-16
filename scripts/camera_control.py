@@ -17,6 +17,8 @@ Usage:
   uv run scripts/camera_control.py set-gain 50        # Set gain to 50
   uv run scripts/camera_control.py get-auto-exposure  # Get auto-exposure status
   uv run scripts/camera_control.py set-auto-exposure 1 # Enable auto-exposure
+  uv run scripts/camera_control.py get-auto-gain      # Get auto-gain status
+  uv run scripts/camera_control.py set-auto-gain 1    # Enable auto-gain
   uv run scripts/camera_control.py status             # Get pipeline status
 
 This script provides both individual control commands and full test suite functionality
@@ -186,6 +188,8 @@ Examples:
   %(prog)s set-gain 50                     # Set gain to 50
   %(prog)s get-auto-exposure               # Get auto-exposure status
   %(prog)s set-auto-exposure 1             # Enable auto-exposure
+  %(prog)s get-auto-gain                   # Get auto-gain status
+  %(prog)s set-auto-gain 1                 # Enable auto-gain
   %(prog)s status                          # Get pipeline status
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -194,7 +198,8 @@ Examples:
     parser.add_argument('command',
                         nargs='?',
                         choices=['test', 'get-exposure', 'set-exposure', 'get-framerate', 'set-framerate',
-                                'get-gain', 'set-gain', 'get-auto-exposure', 'set-auto-exposure', 'status'],
+                                'get-gain', 'set-gain', 'get-auto-exposure', 'set-auto-exposure',
+                                'get-auto-gain', 'set-auto-gain', 'status'],
                         help='Command to execute')
     
     parser.add_argument('value',
@@ -278,6 +283,22 @@ Examples:
             sys.exit(1)
         success = simple_command(f"SET_AUTO_EXPOSURE {ae_value}",
                                 f"{'Enabling' if ae_value else 'Disabling'} auto-exposure")
+        
+    elif args.command == 'get-auto-gain':
+        success = simple_command("GET_AUTO_GAIN", "Getting auto-gain status")
+        
+    elif args.command == 'set-auto-gain':
+        if args.value is None:
+            print("Error: set-auto-gain requires a value (0=off, 1=on)")
+            parser.print_help()
+            sys.exit(1)
+        # Convert to int
+        ag_value = int(args.value)
+        if ag_value not in [0, 1]:
+            print("Error: Auto-gain must be 0 (off) or 1 (on)")
+            sys.exit(1)
+        success = simple_command(f"SET_AUTO_GAIN {ag_value}",
+                                f"{'Enabling' if ag_value else 'Disabling'} auto-gain")
         
     elif args.command == 'status':
         success = simple_command("STATUS", "Getting pipeline status")

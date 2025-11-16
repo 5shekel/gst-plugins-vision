@@ -59,6 +59,7 @@ struct _GstIdsueyeSrc
   gdouble framerate;
   gint gain;
   gboolean auto_exposure;
+  gboolean auto_gain;
 
   GstClockTime acq_start_time;
   guint32 last_frame_count;

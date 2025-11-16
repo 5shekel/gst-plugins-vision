@@ -28,7 +28,8 @@
 #   - Dynamic exposure control (0.015-30000 milliseconds, default: 10ms)
 #   - Auto-exposure mode support (--auto-exposure flag)
 #   - Dynamic framerate control (1-20000 fps, default: 750fps)
-#   - Dynamic gain control (0-100, 0 for auto, default: 0)
+#   - Dynamic gain control (0-100, default: 0)
+#   - Auto-gain mode support (--auto-gain flag)
 #   - Dynamic camera ID selection (0-254, default: 0 for first found)
 #   - Dynamic device ID selection (0-254, system enumeration ID)
 #   - Configurable video cropping (default: crop 3 pixels from bottom)
@@ -44,10 +45,12 @@
 #   GET_CAMERA_ID         - Get current camera ID
 #   SET_DEVICE_ID <value>     - Set device ID (0-254, system enumeration)
 #   GET_DEVICE_ID             - Get current device ID
-#   SET_GAIN <value>          - Set master gain (0-100, 0 for auto)
+#   SET_GAIN <value>          - Set master gain (0-100)
 #   GET_GAIN                  - Get current gain value
 #   SET_AUTO_EXPOSURE <0|1>   - Enable (1) or disable (0) auto-exposure
 #   GET_AUTO_EXPOSURE         - Get auto-exposure status
+#   SET_AUTO_GAIN <0|1>       - Enable (1) or disable (0) auto-gain
+#   GET_AUTO_GAIN             - Get auto-gain status
 #   STATUS                    - Get pipeline status and current settings
 #
 # Example Control Usage:
@@ -138,7 +141,8 @@ class ControlServer:
             print(f"Control server listening on UDP port {self.port}")
             print("  Commands: SET_EXPOSURE <val>, GET_EXPOSURE, SET_FRAMERATE <val>, GET_FRAMERATE,")
             print("            SET_CAMERA_ID <val>, GET_CAMERA_ID, SET_DEVICE_ID <val>, GET_DEVICE_ID,")
-            print("            SET_GAIN <val>, GET_GAIN, SET_AUTO_EXPOSURE <0|1>, GET_AUTO_EXPOSURE, STATUS")
+            print("            SET_GAIN <val>, GET_GAIN, SET_AUTO_EXPOSURE <0|1>, GET_AUTO_EXPOSURE,")
+            print("            SET_AUTO_GAIN <0|1>, GET_AUTO_GAIN, STATUS")
             
             while self.running:
                 try:
@@ -200,6 +204,10 @@ class ControlServer:
                 return self.handle_set_auto_exposure(parts)
             elif cmd == "GET_AUTO_EXPOSURE":
                 return self.handle_get_auto_exposure()
+            elif cmd == "SET_AUTO_GAIN":
+                return self.handle_set_auto_gain(parts)
+            elif cmd == "GET_AUTO_GAIN":
+                return self.handle_get_auto_gain()
             elif cmd == "STATUS":
                 return self.handle_status()
             else:
@@ -371,6 +379,33 @@ class ControlServer:
         except Exception as e:
             return f"ERROR: {str(e)}"
     
+    def handle_set_auto_gain(self, parts):
+        """Handle SET_AUTO_GAIN command"""
+        if len(parts) != 2:
+            return "ERROR INVALID_SYNTAX: Usage: SET_AUTO_GAIN <0|1>"
+        
+        try:
+            value = int(parts[1])
+            if value not in [0, 1]:
+                return "ERROR OUT_OF_RANGE: Auto-gain must be 0 (off) or 1 (on)"
+            
+            self.src.set_property("auto-gain", bool(value))
+            actual = self.src.get_property("auto-gain")
+            return f"OK {int(actual)}"
+        
+        except ValueError:
+            return "ERROR INVALID_SYNTAX: Auto-gain must be 0 or 1"
+        except Exception as e:
+            return f"ERROR: {str(e)}"
+    
+    def handle_get_auto_gain(self):
+        """Handle GET_AUTO_GAIN command"""
+        try:
+            value = self.src.get_property("auto-gain")
+            return f"OK {int(value)}"
+        except Exception as e:
+            return f"ERROR: {str(e)}"
+    
     def handle_status(self):
         """Handle STATUS command"""
         try:
@@ -380,6 +415,7 @@ class ControlServer:
             device_id = self.src.get_property("device-id")
             gain = self.src.get_property("gain")
             auto_exposure = int(self.src.get_property("auto-exposure"))
+            auto_gain = int(self.src.get_property("auto-gain"))
             
             # Get pipeline state
             state = "UNKNOWN"
@@ -387,7 +423,7 @@ class ControlServer:
                 _, current_state, _ = self.pipeline.get_state(0)
                 state = current_state.value_nick.upper()
             
-            return f"OK exposure={exposure} framerate={framerate} camera_id={camera_id} device_id={device_id} gain={gain} auto_exposure={auto_exposure} state={state}"
+            return f"OK exposure={exposure} framerate={framerate} camera_id={camera_id} device_id={device_id} gain={gain} auto_exposure={auto_exposure} auto_gain={auto_gain} state={state}"
         except Exception as e:
             return f"ERROR: {str(e)}"
     
