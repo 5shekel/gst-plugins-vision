@@ -5,12 +5,11 @@
 # ///
 
 """
-Test client for UDP exposure control
+client for UDP camera control
 
 Usage:
   uv run scripts/camera_control.py                    # Get all camera settings (default)
   uv run scripts/camera_control.py get-all            # Get all camera settings
-  uv run scripts/camera_control.py test               # Run full test suite
   uv run scripts/camera_control.py get-exposure       # Get current exposure
   uv run scripts/camera_control.py set-exposure 10    # Set exposure to 10ms
   uv run scripts/camera_control.py get-framerate      # Get current framerate
@@ -25,7 +24,7 @@ Usage:
   uv run scripts/camera_control.py set-gain-boost 1   # Enable gain boost
   uv run scripts/camera_control.py status             # Get pipeline status
 
-This script provides both individual control commands and full test suite functionality
+This script provides control commands
 for the UDP control interface for the IDS uEye camera.
 Make sure launch-ids.py is running before executing commands.
 """
@@ -60,22 +59,6 @@ def send_command(command, host="127.0.0.1", port=5001, timeout=1.0):
     finally:
         sock.close()
 
-def print_test(test_num, description, command, response):
-    """Print formatted test result"""
-    print(f"\nTest {test_num}: {description}")
-    print(f"  Command:  {command}")
-    print(f"  Response: {response}")
-    
-    # Check if response indicates success
-    if response.startswith("OK"):
-        print("  ✓ PASS")
-    elif response.startswith("ERROR"):
-        if "OUT_OF_RANGE" in response or "INVALID" in response:
-            print("  ✓ PASS (Expected error)")
-        else:
-            print("  ✗ FAIL (Unexpected error)")
-    else:
-        print("  ? UNKNOWN")
 
 def simple_command(command, description="Command"):
     """Execute a single command and print the result"""
@@ -119,97 +102,13 @@ def get_all_settings():
     print("=" * 70)
     return all_success
 
-def run_full_tests():
-    """Run the full test suite (original functionality)"""
-    print("=" * 70)
-    print("UDP Exposure Control Test Client")
-    print("=" * 70)
-    print("Testing UDP control interface on 127.0.0.1:5001")
-    print()
-    
-    # Check if server is reachable
-    print("Checking if control server is reachable...")
-    response = send_command("STATUS", timeout=2.0)
-    if "Timeout" in response:
-        print("✗ FAILED: Control server not responding")
-        print("  Make sure launch-ids.py is running first!")
-        sys.exit(1)
-    print("✓ Control server is reachable\n")
-    
-    time.sleep(0.2)
-    
-    # Test 1: Get current exposure
-    response = send_command("GET_EXPOSURE")
-    print_test(1, "Get current exposure", "GET_EXPOSURE", response)
-    time.sleep(0.2)
-    
-    # Test 2: Set exposure to 10ms
-    response = send_command("SET_EXPOSURE 10")
-    print_test(2, "Set exposure to 10ms", "SET_EXPOSURE 10", response)
-    time.sleep(5.2)
-    
-    # Test 3: Verify exposure was set
-    response = send_command("GET_EXPOSURE")
-    print_test(3, "Verify exposure changed", "GET_EXPOSURE", response)
-    time.sleep(0.2)
-    
-    # Test 4: Set exposure to 2ms
-    response = send_command("SET_EXPOSURE 2")
-    print_test(4, "Set exposure to 2ms", "SET_EXPOSURE 2", response)
-    time.sleep(0.2)
-    
-    # Test 5: Get framerate
-    response = send_command("GET_FRAMERATE")
-    print_test(5, "Get current framerate", "GET_FRAMERATE", response)
-    time.sleep(0.2)
-    
-    # Test 6: Set framerate
-    response = send_command("SET_FRAMERATE 44")
-    print_test(6, "Set framerate to 44 fps", "SET_FRAMERATE 44", response)
-    time.sleep(0.2)
-    
-    # Test 7: Verify framerate
-    response = send_command("GET_FRAMERATE")
-    print_test(7, "Verify framerate changed", "GET_FRAMERATE", response)
-    time.sleep(0.2)
-    
-    # Test 8: Get status
-    response = send_command("STATUS")
-    print_test(8, "Get pipeline status", "STATUS", response)
-    time.sleep(0.2)
-    
-    # Test 9: Invalid command
-    response = send_command("INVALID_CMD")
-    print_test(9, "Send invalid command", "INVALID_CMD", response)
-    time.sleep(0.2)
-    
-    # Test 14: Restore original exposure (2ms)
-    response = send_command("SET_EXPOSURE 2")
-    print_test(14, "Restore exposure to 2ms", "SET_EXPOSURE 2", response)
-    time.sleep(0.2)
-    
-    # Test 15: Restore original framerate (22 fps)
-    response = send_command("SET_FRAMERATE 22")
-    print_test(15, "Restore framerate to 22 fps", "SET_FRAMERATE 22", response)
-    
-    print()
-    print("=" * 70)
-    print("Test completed!")
-    print()
-    print("Quick reference:")
-    print("  echo 'SET_EXPOSURE 10' | nc -u 127.0.0.1 5001")
-    print("  echo 'GET_EXPOSURE' | nc -u 127.0.0.1 5001")
-    print("  echo 'STATUS' | nc -u 127.0.0.1 5001")
-    print("=" * 70)
-
 def main():
     """Main function with argument parsing"""
     parser = argparse.ArgumentParser(
-        description="UDP Exposure Control Test Client",
+        description="UDP Exposure Control Client",
         epilog="""
 Examples:
   %(prog)s                                 # Get all camera settings (default)
-  %(prog)s test                            # Run full test suite
   %(prog)s get-all                         # Get all camera settings
   %(prog)s get-exposure                    # Get current exposure
   %(prog)s set-exposure 10                 # Set exposure to 10ms
@@ -230,7 +129,7 @@ Examples:
     
     parser.add_argument('command',
                         nargs='?',
-                        choices=['test', 'get-all', 'get-exposure', 'get-exposure-range', 'set-exposure',
+                        choices=['get-all', 'get-exposure', 'get-exposure-range', 'set-exposure',
                                 'get-framerate', 'set-framerate', 'get-gain', 'set-gain',
                                 'get-auto-exposure', 'set-auto-exposure',
                                 'get-auto-gain', 'set-auto-gain',
@@ -262,10 +161,6 @@ Examples:
         success = get_all_settings()
         sys.exit(0 if success else 1)
     
-    # Handle test command (full test suite)
-    if args.command == 'test':
-        run_full_tests()
-        return
     
     # Handle individual commands
     if args.command == 'get-all':
