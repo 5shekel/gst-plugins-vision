@@ -76,7 +76,8 @@ enum
   PROP_FRAMERATE,
   PROP_GAIN,
   PROP_AUTO_EXPOSURE,
-  PROP_AUTO_GAIN
+  PROP_AUTO_GAIN,
+  PROP_GAIN_BOOST
 };
 
 #define DEFAULT_PROP_CAMERA_ID 0
@@ -89,6 +90,7 @@ enum
 #define DEFAULT_PROP_GAIN 0
 #define DEFAULT_PROP_AUTO_EXPOSURE FALSE
 #define DEFAULT_PROP_AUTO_GAIN FALSE
+#define DEFAULT_PROP_GAIN_BOOST FALSE
 
 /* pad templates */
 
@@ -181,6 +183,10 @@ gst_idsueyesrc_class_init (GstIdsueyeSrcClass * klass)
       g_param_spec_boolean ("auto-gain", "Auto Gain",
           "Enable automatic gain control", DEFAULT_PROP_AUTO_GAIN,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+  g_object_class_install_property (gobject_class, PROP_GAIN_BOOST,
+      g_param_spec_boolean ("gain-boost", "Gain Boost",
+          "Enable hardware gain boost", DEFAULT_PROP_GAIN_BOOST,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 }
 
 static void
@@ -218,6 +224,7 @@ gst_idsueyesrc_init (GstIdsueyeSrc * src)
   src->gain = DEFAULT_PROP_GAIN;
   src->auto_exposure = DEFAULT_PROP_AUTO_EXPOSURE;
   src->auto_gain = DEFAULT_PROP_AUTO_GAIN;
+  src->gain_boost = DEFAULT_PROP_GAIN_BOOST;
 
   src->stop_requested = FALSE;
   src->caps = NULL;
@@ -285,6 +292,16 @@ gst_idsueyesrc_set_property (GObject * object, guint property_id,
         gst_idsueyesrc_set_framerate_exposure (src);
       }
       break;
+    case PROP_GAIN_BOOST:
+      src->gain_boost = g_value_get_boolean (value);
+      if (src->is_started) {
+        INT ret = is_SetGainBoost (src->hCam, src->gain_boost ? IS_SET_GAINBOOST_ON : IS_SET_GAINBOOST_OFF);
+        if (ret != IS_SUCCESS) {
+          GST_WARNING_OBJECT (src, "Failed to set gain boost to %d (error %d)",
+              src->gain_boost, ret);
+        }
+      }
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -330,6 +347,9 @@ gst_idsueyesrc_get_property (GObject * object, guint property_id,
       break;
     case PROP_AUTO_GAIN:
       g_value_set_boolean (value, src->auto_gain);
+      break;
+    case PROP_GAIN_BOOST:
+      g_value_set_boolean (value, src->gain_boost);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -1058,6 +1078,16 @@ gst_idsueyesrc_set_framerate_exposure (GstIdsueyeSrc * src)
         success = FALSE;
       }
     }
+  }
+
+  /* Handle gain boost */
+  ret = is_SetGainBoost (src->hCam, src->gain_boost ? IS_SET_GAINBOOST_ON : IS_SET_GAINBOOST_OFF);
+  if (ret != IS_SUCCESS) {
+    GST_WARNING_OBJECT (src, "Failed to set gain boost to %d (error %d)",
+        src->gain_boost, ret);
+    success = FALSE;
+  } else {
+    GST_DEBUG_OBJECT (src, "Gain boost %s", src->gain_boost ? "enabled" : "disabled");
   }
 
   return success;

@@ -30,6 +30,7 @@
 #   - Dynamic framerate control (1-20000 fps, default: 750fps)
 #   - Dynamic gain control (0-100, default: 0)
 #   - Auto-gain mode support (--auto-gain flag)
+#   - Gain boost support (--gain-boost flag)
 #   - Dynamic camera ID selection (0-254, default: 0 for first found)
 #   - Dynamic device ID selection (0-254, system enumeration ID)
 #   - Configurable video cropping (default: crop 3 pixels from bottom)
@@ -52,6 +53,8 @@
 #   GET_AUTO_EXPOSURE         - Get auto-exposure status
 #   SET_AUTO_GAIN <0|1>       - Enable (1) or disable (0) auto-gain
 #   GET_AUTO_GAIN             - Get auto-gain status
+#   SET_GAIN_BOOST <0|1>      - Enable (1) or disable (0) hardware gain boost
+#   GET_GAIN_BOOST            - Get gain boost status
 #   STATUS                    - Get pipeline status and current settings
 #
 # Example Control Usage:
@@ -143,7 +146,8 @@ class ControlServer:
             print("  Commands: SET_EXPOSURE <val>, GET_EXPOSURE, SET_FRAMERATE <val>, GET_FRAMERATE,")
             print("            SET_CAMERA_ID <val>, GET_CAMERA_ID, SET_DEVICE_ID <val>, GET_DEVICE_ID,")
             print("            SET_GAIN <val>, GET_GAIN, SET_AUTO_EXPOSURE <0|1>, GET_AUTO_EXPOSURE,")
-            print("            SET_AUTO_GAIN <0|1>, GET_AUTO_GAIN, STATUS")
+            print("            SET_AUTO_GAIN <0|1>, GET_AUTO_GAIN, SET_GAIN_BOOST <0|1>, GET_GAIN_BOOST,")
+            print("            STATUS")
             
             while self.running:
                 try:
@@ -211,6 +215,10 @@ class ControlServer:
                 return self.handle_set_auto_gain(parts)
             elif cmd == "GET_AUTO_GAIN":
                 return self.handle_get_auto_gain()
+            elif cmd == "SET_GAIN_BOOST":
+                return self.handle_set_gain_boost(parts)
+            elif cmd == "GET_GAIN_BOOST":
+                return self.handle_get_gain_boost()
             elif cmd == "STATUS":
                 return self.handle_status()
             else:
@@ -420,6 +428,33 @@ class ControlServer:
         except Exception as e:
             return f"ERROR: {str(e)}"
     
+    def handle_set_gain_boost(self, parts):
+        """Handle SET_GAIN_BOOST command"""
+        if len(parts) != 2:
+            return "ERROR INVALID_SYNTAX: Usage: SET_GAIN_BOOST <0|1>"
+        
+        try:
+            value = int(parts[1])
+            if value not in [0, 1]:
+                return "ERROR OUT_OF_RANGE: Gain boost must be 0 (off) or 1 (on)"
+            
+            self.src.set_property("gain-boost", bool(value))
+            actual = self.src.get_property("gain-boost")
+            return f"OK {int(actual)}"
+        
+        except ValueError:
+            return "ERROR INVALID_SYNTAX: Gain boost must be 0 or 1"
+        except Exception as e:
+            return f"ERROR: {str(e)}"
+    
+    def handle_get_gain_boost(self):
+        """Handle GET_GAIN_BOOST command"""
+        try:
+            value = self.src.get_property("gain-boost")
+            return f"OK {int(value)}"
+        except Exception as e:
+            return f"ERROR: {str(e)}"
+    
     def handle_status(self):
         """Handle STATUS command"""
         try:
@@ -430,6 +465,7 @@ class ControlServer:
             gain = self.src.get_property("gain")
             auto_exposure = int(self.src.get_property("auto-exposure"))
             auto_gain = int(self.src.get_property("auto-gain"))
+            gain_boost = int(self.src.get_property("gain-boost"))
             
             # Get pipeline state
             state = "UNKNOWN"
@@ -437,7 +473,7 @@ class ControlServer:
                 _, current_state, _ = self.pipeline.get_state(0)
                 state = current_state.value_nick.upper()
             
-            return f"OK exposure={exposure} framerate={framerate} camera_id={camera_id} device_id={device_id} gain={gain} auto_exposure={auto_exposure} auto_gain={auto_gain} state={state}"
+            return f"OK exposure={exposure} framerate={framerate} camera_id={camera_id} device_id={device_id} gain={gain} auto_exposure={auto_exposure} auto_gain={auto_gain} gain_boost={gain_boost} state={state}"
         except Exception as e:
             return f"ERROR: {str(e)}"
     
@@ -478,16 +514,16 @@ Examples:
     camera_group.add_argument(
         '--exposure', '-e',
         type=float,
-        default=10.0,
+        default=None,
         metavar='MS',
-        help='Camera exposure time in milliseconds (0.015-30000)'
+        help='Camera exposure time in milliseconds (0.015-30000, default from INI file)'
     )
     camera_group.add_argument(
         '--framerate', '--fps', '-f',
         type=float,
-        default=750.0,
+        default=None,
         metavar='HZ',
-        help='Camera framerate in Hz (1.0-20200.0)'
+        help='Camera framerate in Hz (1.0-20200.0, default from INI file)'
     )
     camera_group.add_argument(
         '--camera-id',
@@ -506,14 +542,24 @@ Examples:
     camera_group.add_argument(
         '--gain', '-g',
         type=int,
-        default=0,
+        default=None,
         metavar='GAIN',
-        help='Master gain (0-100, 0 for auto/default)'
+        help='Master gain (0-100, default from INI file)'
     )
     camera_group.add_argument(
         '--auto-exposure',
         action='store_true',
         help='Enable automatic exposure control'
+    )
+    camera_group.add_argument(
+        '--auto-gain',
+        action='store_true',
+        help='Enable automatic gain control'
+    )
+    camera_group.add_argument(
+        '--gain-boost',
+        action='store_true',
+        help='Enable hardware gain boost'
     )
     
     # Video processing
@@ -590,11 +636,11 @@ Examples:
     
     args = parser.parse_args()
     
-    # Validation
-    if args.exposure < 1.0 or args.exposure > 30000:
-        parser.error(f"Exposure must be between 1.0 and 30000 ms, got {args.exposure}")
+    # Validation - only validate if provided
+    if args.exposure is not None and (args.exposure < 0.015 or args.exposure > 30000):
+        parser.error(f"Exposure must be between 0.015 and 30000 ms, got {args.exposure}")
     
-    if args.framerate < 1.0 or args.framerate > 20200.0:
+    if args.framerate is not None and (args.framerate < 1.0 or args.framerate > 20200.0):
         parser.error(f"Framerate must be between 1.0 and 20200.0 Hz, got {args.framerate}")
     
     if args.camera_id < 0 or args.camera_id > 254:
@@ -603,7 +649,7 @@ Examples:
     if args.device_id < 0 or args.device_id > 254:
         parser.error(f"Device ID must be between 0 and 254, got {args.device_id}")
     
-    if args.gain < 0 or args.gain > 100:
+    if args.gain is not None and (args.gain < 0 or args.gain > 100):
         parser.error(f"Gain must be between 0 and 100, got {args.gain}")
     
     if args.port < 1 or args.port > 65535:
@@ -654,21 +700,32 @@ pipeline = Gst.Pipeline()
 src = Gst.ElementFactory.make("idsueyesrc", "src")
 src.set_property("config-file", args.config)
 
-# Exposure in milliseconds
-src.set_property("exposure", args.exposure)
+# Only set properties that were explicitly provided via command line
+# The INI config file provides all defaults
 
-# Frame rate
-src.set_property("framerate", args.framerate)
-
-# Camera ID and Device ID
+# Camera ID and Device ID - always set as they determine which camera to use
 src.set_property("camera-id", args.camera_id)
 src.set_property("device-id", args.device_id)
 
-# Gain (0 for auto/default)
-src.set_property("gain", args.gain)
+# Only set if explicitly provided by user
+if args.exposure is not None:
+    src.set_property("exposure", args.exposure)
 
-# Auto-exposure
-src.set_property("auto-exposure", args.auto_exposure)
+if args.framerate is not None:
+    src.set_property("framerate", args.framerate)
+
+if args.gain is not None:
+    src.set_property("gain", args.gain)
+
+# Boolean flags - only set if explicitly enabled
+if args.auto_exposure:
+    src.set_property("auto-exposure", True)
+
+if args.auto_gain:
+    src.set_property("auto-gain", True)
+
+if args.gain_boost:
+    src.set_property("gain-boost", True)
 
 # Video crop to remove bottom pixels (if enabled)
 elements_to_link = [src]
@@ -811,9 +868,21 @@ if not args.quiet:
     print(f"Camera config:  {args.config}")
     print(f"Camera ID:      {args.camera_id}")
     print(f"Device ID:      {args.device_id}")
-    print(f"Exposure:       {args.exposure} ms")
-    print(f"Framerate:      {args.framerate} Hz")
-    print(f"Gain:           {args.gain} (0=auto)")
+    if args.exposure is not None:
+        print(f"Exposure:       {args.exposure} ms")
+    else:
+        print(f"Exposure:       (from INI file)")
+    if args.framerate is not None:
+        print(f"Framerate:      {args.framerate} Hz")
+    else:
+        print(f"Framerate:      (from INI file)")
+    if args.gain is not None:
+        print(f"Gain:           {args.gain}")
+    else:
+        print(f"Gain:           (from INI file)")
+    print(f"Auto-exposure:  {'enabled' if args.auto_exposure else '(from INI file)'}")
+    print(f"Auto-gain:      {'enabled' if args.auto_gain else '(from INI file)'}")
+    print(f"Gain boost:     {'enabled' if args.gain_boost else '(from INI file)'}")
     if args.crop_bottom > 0:
         print(f"Crop bottom:    {args.crop_bottom} pixels")
     else:

@@ -60,6 +60,7 @@ struct _GstIdsueyeSrc
   gint gain;
   gboolean auto_exposure;
   gboolean auto_gain;
+  gboolean gain_boost;
 
   GstClockTime acq_start_time;
   guint32 last_frame_count;
