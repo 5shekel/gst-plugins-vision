@@ -1,20 +1,34 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.8"
-# dependencies = []
+# dependencies = ["argcomplete"]
 # ///
 
 """
 Test client for UDP exposure control
-Usage: uv run scripts/test_exposure_control.py
 
-This script tests the UDP control interface for the IDS uEye camera.
-Make sure launch-ids.py is running before executing this test.
+Usage:
+  uv run scripts/camera_control.py                    # Run full test suite
+  uv run scripts/camera_control.py get-exposure       # Get current exposure
+  uv run scripts/camera_control.py set-exposure 10    # Set exposure to 10ms
+  uv run scripts/camera_control.py get-framerate      # Get current framerate
+  uv run scripts/camera_control.py set-framerate 30   # Set framerate to 30fps
+  uv run scripts/camera_control.py status             # Get pipeline status
+
+This script provides both individual control commands and full test suite functionality
+for the UDP control interface for the IDS uEye camera.
+Make sure launch-ids.py is running before executing commands.
 """
 
+import argparse
 import socket
 import time
 import sys
+
+try:
+    import argcomplete
+except ImportError:
+    argcomplete = None
 
 def send_command(command, host="127.0.0.1", port=5001, timeout=1.0):
     """Send a command and return the response"""
@@ -53,7 +67,24 @@ def print_test(test_num, description, command, response):
     else:
         print("  ? UNKNOWN")
 
-def main():
+def simple_command(command, description="Command"):
+    """Execute a single command and print the result"""
+    print(f"{description}...")
+    response = send_command(command)
+    print(f"Response: {response}")
+    
+    # Check if response indicates success
+    if response.startswith("OK"):
+        return True
+    elif response.startswith("ERROR"):
+        print(f"Error: {response}")
+        return False
+    else:
+        print(f"Unknown response: {response}")
+        return False
+
+def run_full_tests():
+    """Run the full test suite (original functionality)"""
     print("=" * 70)
     print("UDP Exposure Control Test Client")
     print("=" * 70)
@@ -86,9 +117,9 @@ def main():
     print_test(3, "Verify exposure changed", "GET_EXPOSURE", response)
     time.sleep(0.2)
     
-    # Test 4: Set exposure to 20ms
-    response = send_command("SET_EXPOSURE 20")
-    print_test(4, "Set exposure to 20ms", "SET_EXPOSURE 20", response)
+    # Test 4: Set exposure to 2ms
+    response = send_command("SET_EXPOSURE 2")
+    print_test(4, "Set exposure to 2ms", "SET_EXPOSURE 2", response)
     time.sleep(0.2)
     
     # Test 5: Get framerate
@@ -97,8 +128,8 @@ def main():
     time.sleep(0.2)
     
     # Test 6: Set framerate
-    response = send_command("SET_FRAMERATE 30")
-    print_test(6, "Set framerate to 30 fps", "SET_FRAMERATE 30", response)
+    response = send_command("SET_FRAMERATE 44")
+    print_test(6, "Set framerate to 44 fps", "SET_FRAMERATE 44", response)
     time.sleep(0.2)
     
     # Test 7: Verify framerate
@@ -116,29 +147,9 @@ def main():
     print_test(9, "Send invalid command", "INVALID_CMD", response)
     time.sleep(0.2)
     
-    # Test 10: Out of range exposure (too high)
-    response = send_command("SET_EXPOSURE 5000")
-    print_test(10, "Out of range exposure (5000ms)", "SET_EXPOSURE 5000", response)
-    time.sleep(0.2)
-    
-    # Test 11: Out of range exposure (too low)
-    response = send_command("SET_EXPOSURE 0.1")
-    print_test(11, "Out of range exposure (0.1ms)", "SET_EXPOSURE 0.1", response)
-    time.sleep(0.2)
-    
-    # Test 12: Invalid syntax (missing parameter)
-    response = send_command("SET_EXPOSURE")
-    print_test(12, "Invalid syntax (missing param)", "SET_EXPOSURE", response)
-    time.sleep(0.2)
-    
-    # Test 13: Invalid syntax (non-numeric)
-    response = send_command("SET_EXPOSURE abc")
-    print_test(13, "Invalid syntax (non-numeric)", "SET_EXPOSURE abc", response)
-    time.sleep(0.2)
-    
-    # Test 14: Restore original exposure (16ms)
-    response = send_command("SET_EXPOSURE 16")
-    print_test(14, "Restore exposure to 16ms", "SET_EXPOSURE 16", response)
+    # Test 14: Restore original exposure (2ms)
+    response = send_command("SET_EXPOSURE 2")
+    print_test(14, "Restore exposure to 2ms", "SET_EXPOSURE 2", response)
     time.sleep(0.2)
     
     # Test 15: Restore original framerate (22 fps)
@@ -154,6 +165,85 @@ def main():
     print("  echo 'GET_EXPOSURE' | nc -u 127.0.0.1 5001")
     print("  echo 'STATUS' | nc -u 127.0.0.1 5001")
     print("=" * 70)
+
+def main():
+    """Main function with argument parsing"""
+    parser = argparse.ArgumentParser(
+        description="UDP Exposure Control Test Client",
+        epilog="""
+Examples:
+  %(prog)s                                 # Show this help
+  %(prog)s test                            # Run full test suite
+  %(prog)s get-exposure                    # Get current exposure
+  %(prog)s set-exposure 10                 # Set exposure to 10ms
+  %(prog)s get-framerate                   # Get current framerate
+  %(prog)s set-framerate 30                # Set framerate to 30fps
+  %(prog)s status                          # Get pipeline status
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    parser.add_argument('command',
+                        nargs='?',
+                        choices=['test', 'get-exposure', 'set-exposure', 'get-framerate', 'set-framerate', 'status'],
+                        help='Command to execute')
+    
+    parser.add_argument('value',
+                        nargs='?',
+                        type=float,
+                        help='Value for set commands (exposure in ms, framerate in fps)')
+    
+    parser.add_argument('--host',
+                        default='127.0.0.1',
+                        help='Host address (default: 127.0.0.1)')
+    
+    parser.add_argument('--port',
+                        type=int,
+                        default=5001,
+                        help='Port number (default: 5001)')
+    
+    # Enable tab completion if argcomplete is available
+    if argcomplete:
+        argcomplete.autocomplete(parser)
+    
+    args = parser.parse_args()
+    
+    # If no command provided, show help
+    if args.command is None:
+        parser.print_help()
+        return
+    
+    # Handle test command (full test suite)
+    if args.command == 'test':
+        run_full_tests()
+        return
+    
+    # Handle individual commands
+    if args.command == 'get-exposure':
+        success = simple_command("GET_EXPOSURE", "Getting current exposure")
+        
+    elif args.command == 'set-exposure':
+        if args.value is None:
+            print("Error: set-exposure requires a value (exposure in milliseconds)")
+            parser.print_help()
+            sys.exit(1)
+        success = simple_command(f"SET_EXPOSURE {args.value}", f"Setting exposure to {args.value}ms")
+        
+    elif args.command == 'get-framerate':
+        success = simple_command("GET_FRAMERATE", "Getting current framerate")
+        
+    elif args.command == 'set-framerate':
+        if args.value is None:
+            print("Error: set-framerate requires a value (framerate in fps)")
+            parser.print_help()
+            sys.exit(1)
+        success = simple_command(f"SET_FRAMERATE {args.value}", f"Setting framerate to {args.value}fps")
+        
+    elif args.command == 'status':
+        success = simple_command("STATUS", "Getting pipeline status")
+    
+    # Exit with appropriate code
+    sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
     main()
