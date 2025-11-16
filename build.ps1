@@ -98,9 +98,10 @@ if ($BuildType -eq 'IDSuEyeOnly') {
     $useStandaloneCMake = $false
     $pluginPaths = @(
         @{ Name = "libgstidsueye.dll"; RelPath = "sys\idsueye\Release\libgstidsueye.dll" },
-        @{ Name = "libgstrollingsum.dll"; RelPath = "gst\rollingsum\Release\libgstrollingsum.dll" }
+        @{ Name = "libgstrollingsum.dll"; RelPath = "gst\rollingsum\Release\libgstrollingsum.dll" },
+        @{ Name = "libgstintervalometer.dll"; RelPath = "gst\intervalometer\Release\libgstintervalometer.dll" }
     )
-    Write-Host "Building: All plugins (IDS uEye, Rolling Sum)" -ForegroundColor Yellow
+    Write-Host "Building: All plugins (IDS uEye, Rolling Sum, Intervalometer)" -ForegroundColor Yellow
 }
 
 Write-Host ""
@@ -292,9 +293,14 @@ try {
         Write-Host "Verify installation with:" -ForegroundColor Yellow
         Write-Host "  gst-inspect-1.0 idsueyesrc" -ForegroundColor White
         Write-Host "  gst-inspect-1.0 rollingsum" -ForegroundColor White
+        Write-Host "  gst-inspect-1.0 intervalometer" -ForegroundColor White
         Write-Host ""
-        Write-Host "Example pipeline:" -ForegroundColor Yellow
+        Write-Host "Example pipelines:" -ForegroundColor Yellow
+        Write-Host "  # Rolling sum detection:" -ForegroundColor Gray
         Write-Host "  gst-launch-1.0 idsueyesrc config-file=config.ini ! rollingsum window-size=1000 column-index=1 threshold=0.5 ! autovideosink" -ForegroundColor White
+        Write-Host ""
+        Write-Host "  # Auto-exposure time-lapse:" -ForegroundColor Gray
+        Write-Host "  gst-launch-1.0 idsueyesrc name=cam ! intervalometer enabled=true camera-element=cam exposure-min=0.85 exposure-max=1.24 gain-min=0 gain-max=52 ! autovideosink" -ForegroundColor White
     }
     Write-Host ""
 
