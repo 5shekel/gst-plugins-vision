@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.8"
-# dependencies = ["argcomplete"]
+# dependencies = []
 # ///
 
 """
@@ -34,10 +34,6 @@ import socket
 import time
 import sys
 
-try:
-    import argcomplete
-except ImportError:
-    argcomplete = None
 
 def send_command(command, host="127.0.0.1", port=5001, timeout=1.0):
     """Send a command and return the response"""
@@ -154,9 +150,6 @@ Examples:
                         metavar='SECONDS',
                         help='Timeout for UDP requests in seconds (default: 1.0)')
     
-    # Enable tab completion if argcomplete is available
-    if argcomplete:
-        argcomplete.autocomplete(parser)
     
     args = parser.parse_args()
     
