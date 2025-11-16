@@ -343,13 +343,58 @@ gst_idsueyesrc_get_property (GObject * object, guint property_id,
       g_value_set_int (value, src->gain);
       break;
     case PROP_AUTO_EXPOSURE:
-      g_value_set_boolean (value, src->auto_exposure);
+      if (src->is_started && src->hCam) {
+        double enable = 0.0;
+        INT ret = is_SetAutoParameter (src->hCam, IS_GET_ENABLE_AUTO_SHUTTER,
+            &enable, NULL);
+        if (ret == IS_SUCCESS) {
+          gboolean actual_state = (enable != 0.0);
+          /* Update cached value to match hardware state */
+          src->auto_exposure = actual_state;
+          g_value_set_boolean (value, actual_state);
+        } else {
+          GST_WARNING_OBJECT (src, "Failed to query auto exposure state (error %d), returning cached value",
+              ret);
+          g_value_set_boolean (value, src->auto_exposure);
+        }
+      } else {
+        g_value_set_boolean (value, src->auto_exposure);
+      }
       break;
     case PROP_AUTO_GAIN:
-      g_value_set_boolean (value, src->auto_gain);
+      if (src->is_started && src->hCam) {
+        double enable = 0.0;
+        INT ret = is_SetAutoParameter (src->hCam, IS_GET_ENABLE_AUTO_GAIN,
+            &enable, NULL);
+        if (ret == IS_SUCCESS) {
+          gboolean actual_state = (enable != 0.0);
+          /* Update cached value to match hardware state */
+          src->auto_gain = actual_state;
+          g_value_set_boolean (value, actual_state);
+        } else {
+          GST_WARNING_OBJECT (src, "Failed to query auto gain state (error %d), returning cached value",
+              ret);
+          g_value_set_boolean (value, src->auto_gain);
+        }
+      } else {
+        g_value_set_boolean (value, src->auto_gain);
+      }
       break;
     case PROP_GAIN_BOOST:
-      g_value_set_boolean (value, src->gain_boost);
+      if (src->is_started && src->hCam) {
+        INT ret = is_SetGainBoost (src->hCam, IS_GET_GAINBOOST);
+        if (ret != IS_INVALID_PARAMETER) {
+          gboolean actual_state = (ret == IS_SET_GAINBOOST_ON);
+          /* Update cached value to match hardware state */
+          src->gain_boost = actual_state;
+          g_value_set_boolean (value, actual_state);
+        } else {
+          GST_WARNING_OBJECT (src, "Failed to query gain boost state, returning cached value");
+          g_value_set_boolean (value, src->gain_boost);
+        }
+      } else {
+        g_value_set_boolean (value, src->gain_boost);
+      }
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
