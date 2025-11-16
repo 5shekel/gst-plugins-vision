@@ -8,7 +8,9 @@
 Test client for UDP exposure control
 
 Usage:
-  uv run scripts/camera_control.py                    # Run full test suite
+  uv run scripts/camera_control.py                    # Get all camera settings (default)
+  uv run scripts/camera_control.py get-all            # Get all camera settings
+  uv run scripts/camera_control.py test               # Run full test suite
   uv run scripts/camera_control.py get-exposure       # Get current exposure
   uv run scripts/camera_control.py set-exposure 10    # Set exposure to 10ms
   uv run scripts/camera_control.py get-framerate      # Get current framerate
@@ -90,6 +92,32 @@ def simple_command(command, description="Command"):
     else:
         print(f"Unknown response: {response}")
         return False
+
+def get_all_settings():
+    """Get all camera settings"""
+    print("=" * 70)
+    print("Camera Settings")
+    print("=" * 70)
+    
+    settings = [
+        ("Exposure", "GET_EXPOSURE"),
+        ("Exposure Range", "GET_EXPOSURE_RANGE"),
+        ("Framerate", "GET_FRAMERATE"),
+        ("Gain", "GET_GAIN"),
+        ("Auto-Exposure", "GET_AUTO_EXPOSURE"),
+        ("Auto-Gain", "GET_AUTO_GAIN"),
+        ("Gain Boost", "GET_GAIN_BOOST"),
+    ]
+    
+    all_success = True
+    for name, command in settings:
+        response = send_command(command)
+        print(f"{name:20s}: {response}")
+        if response.startswith("ERROR"):
+            all_success = False
+    
+    print("=" * 70)
+    return all_success
 
 def run_full_tests():
     """Run the full test suite (original functionality)"""
@@ -180,8 +208,9 @@ def main():
         description="UDP Exposure Control Test Client",
         epilog="""
 Examples:
-  %(prog)s                                 # Show this help
+  %(prog)s                                 # Get all camera settings (default)
   %(prog)s test                            # Run full test suite
+  %(prog)s get-all                         # Get all camera settings
   %(prog)s get-exposure                    # Get current exposure
   %(prog)s set-exposure 10                 # Set exposure to 10ms
   %(prog)s get-framerate                   # Get current framerate
@@ -201,7 +230,7 @@ Examples:
     
     parser.add_argument('command',
                         nargs='?',
-                        choices=['test', 'get-exposure', 'get-exposure-range', 'set-exposure',
+                        choices=['test', 'get-all', 'get-exposure', 'get-exposure-range', 'set-exposure',
                                 'get-framerate', 'set-framerate', 'get-gain', 'set-gain',
                                 'get-auto-exposure', 'set-auto-exposure',
                                 'get-auto-gain', 'set-auto-gain',
@@ -228,10 +257,10 @@ Examples:
     
     args = parser.parse_args()
     
-    # If no command provided, show help
+    # If no command provided, run get-all by default
     if args.command is None:
-        parser.print_help()
-        return
+        success = get_all_settings()
+        sys.exit(0 if success else 1)
     
     # Handle test command (full test suite)
     if args.command == 'test':
@@ -239,7 +268,10 @@ Examples:
         return
     
     # Handle individual commands
-    if args.command == 'get-exposure':
+    if args.command == 'get-all':
+        success = get_all_settings()
+        
+    elif args.command == 'get-exposure':
         success = simple_command("GET_EXPOSURE", "Getting current exposure")
         
     elif args.command == 'get-exposure-range':
