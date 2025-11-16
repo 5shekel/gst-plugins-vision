@@ -25,7 +25,7 @@
 # Features:
 #   - Configurable video streaming (default: UDP port 5000 to 127.0.0.1)
 #   - Optional control interface (default: UDP port 5001 on 0.0.0.0)
-#   - Dynamic exposure control (1.0-1000.0 milliseconds, default: 10ms)
+#   - Dynamic exposure control (0.015-30000 milliseconds, default: 10ms)
 #   - Dynamic framerate control (1-20000 fps, default: 750fps)
 #   - Dynamic camera ID selection (0-254, default: 0 for first found)
 #   - Dynamic device ID selection (0-254, system enumeration ID)
@@ -200,8 +200,8 @@ class ControlServer:
         
         try:
             value = float(parts[1])
-            if value < 1.0 or value > 1000.0:
-                return "ERROR OUT_OF_RANGE: Exposure must be 1.0-1000.0 milliseconds"
+            if value < 1.0 or value > 30000:
+                return "ERROR OUT_OF_RANGE: Exposure must be 0.015-30000 milliseconds"
             
             self.src.set_property("exposure", value)
             # Verify the value was set
@@ -359,7 +359,7 @@ Examples:
         type=float,
         default=10.0,
         metavar='MS',
-        help='Camera exposure time in milliseconds (1.0-1000.0)'
+        help='Camera exposure time in milliseconds (0.015-30000)'
     )
     camera_group.add_argument(
         '--framerate', '--fps', '-f',
@@ -458,8 +458,8 @@ Examples:
     args = parser.parse_args()
     
     # Validation
-    if args.exposure < 1.0 or args.exposure > 1000.0:
-        parser.error(f"Exposure must be between 1.0 and 1000.0 ms, got {args.exposure}")
+    if args.exposure < 1.0 or args.exposure > 30000:
+        parser.error(f"Exposure must be between 1.0 and 30000 ms, got {args.exposure}")
     
     if args.framerate < 1.0 or args.framerate > 20200.0:
         parser.error(f"Framerate must be between 1.0 and 20200.0 Hz, got {args.framerate}")
