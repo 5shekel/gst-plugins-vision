@@ -2,31 +2,42 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = "==3.13"
-# dependencies = []
+# dependencies = ["argcomplete"]
 # ///
 #
 # IDS uEye Camera Control Script with UDP Exposure Control
 #
 # This script streams video from an IDS uEye camera via UDP and provides
 # a UDP control interface for dynamically adjusting exposure and framerate.
+# All parameters are configurable via command-line arguments with sensible defaults.
 #
 # Setup:
 #   Run with: . .\scripts\setup_gstreamer_env.ps1 && uv run .\scripts\launch-ids.py
 #
-# Features:
-#   - Video streaming on UDP port 5000 (127.0.0.1)
-#   - Control interface on UDP port 5001 (0.0.0.0)
-#   - Dynamic exposure control (1.0-1000.0 milliseconds)
-#   - Dynamic framerate control (1-500 fps)
+# Basic Usage:
+#   uv run .\scripts\launch-ids.py                    # Use all defaults
+#   uv run .\scripts\launch-ids.py --help             # Show all options
+#   uv run .\scripts\launch-ids.py -e 16 -f 30        # Set exposure & framerate
+#   uv run .\scripts\launch-ids.py --port 6000        # Custom streaming port
+#   uv run .\scripts\launch-ids.py --no-crop --quiet  # No cropping, minimal output
 #
-# Control Commands:
+# Features:
+#   - Configurable video streaming (default: UDP port 5000 to 127.0.0.1)
+#   - Optional control interface (default: UDP port 5001 on 0.0.0.0)
+#   - Dynamic exposure control (1.0-1000.0 milliseconds, default: 10ms)
+#   - Dynamic framerate control (1-20000 fps, default: 750fps)
+#   - Configurable video cropping (default: crop 3 pixels from bottom)
+#   - Verbose/quiet output modes
+#   - Custom camera configuration files
+#
+# Control Commands (when control server enabled):
 #   SET_EXPOSURE <value>  - Set exposure in milliseconds (e.g., 16)
 #   GET_EXPOSURE          - Get current exposure value
 #   SET_FRAMERATE <value> - Set framerate in Hz (e.g., 30)
 #   GET_FRAMERATE         - Get current framerate
 #   STATUS                - Get pipeline status and current settings
 #
-# Example Usage:
+# Example Control Usage:
 #   echo "SET_EXPOSURE 10" | nc -u 127.0.0.1 5001
 #   echo "GET_EXPOSURE" | nc -u 127.0.0.1 5001
 #
@@ -37,6 +48,8 @@
 #   See scripts/UDP_CONTROL_PROTOCOL.md for full protocol details
 #
 # Add GStreamer Python packages
+import argparse
+import argcomplete
 import os
 import sys
 import socket
@@ -199,8 +212,8 @@ class ControlServer:
         
         try:
             value = float(parts[1])
-            if value < 1.0 or value > 500.0:
-                return "ERROR OUT_OF_RANGE: Framerate must be 1.0-500.0 Hz"
+            if value < 1.0 or value > 20200.0:
+                return "ERROR OUT_OF_RANGE: Framerate must be 1.0-20200.0 Hz"
             
             self.src.set_property("framerate", value)
             actual = self.src.get_property("framerate")
@@ -243,56 +256,245 @@ class ControlServer:
             print(f"Failed to send response: {e}")
 
 
+def parse_arguments():
+    """Parse command line arguments with nice defaults"""
+    parser = argparse.ArgumentParser(
+        description='IDS uEye Camera Control Script with UDP Exposure Control',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s                                    # Use all defaults
+  %(prog)s --exposure 16 --framerate 30      # Basic video settings
+  %(prog)s --config custom.ini --port 6000   # Custom config and streaming port
+  %(prog)s --host 192.168.1.100 --no-crop   # Stream to remote host without cropping
+  %(prog)s --control-port 6001 --verbose     # Custom control port with verbose output
+        """,
+        add_help=True
+    )
+    
+    # Camera configuration
+    camera_group = parser.add_argument_group('Camera Settings')
+    camera_group.add_argument(
+        '--config', '--config-file',
+        type=str,
+        default='ini/100fps-10exp-2456x4pix-500top-cw-extragain.ini',
+        metavar='PATH',
+        help='Camera configuration file path'
+    )
+    camera_group.add_argument(
+        '--exposure', '-e',
+        type=float,
+        default=10.0,
+        metavar='MS',
+        help='Camera exposure time in milliseconds (1.0-1000.0)'
+    )
+    camera_group.add_argument(
+        '--framerate', '--fps', '-f',
+        type=float,
+        default=750.0,
+        metavar='HZ',
+        help='Camera framerate in Hz (1.0-20200.0)'
+    )
+    
+    # Video processing
+    video_group = parser.add_argument_group('Video Processing')
+    video_group.add_argument(
+        '--crop-bottom',
+        type=int,
+        default=3,
+        metavar='PIXELS',
+        help='Number of pixels to crop from bottom (0 to disable)'
+    )
+    video_group.add_argument(
+        '--no-crop',
+        action='store_true',
+        help='Disable video cropping (equivalent to --crop-bottom 0)'
+    )
+    video_group.add_argument(
+        '--queue-size',
+        type=int,
+        default=None,
+        metavar='BUFFERS',
+        help='Queue buffer size (default: use GStreamer defaults)'
+    )
+    
+    # Network settings
+    network_group = parser.add_argument_group('Network Settings')
+    network_group.add_argument(
+        '--host', '--udp-host',
+        type=str,
+        default='127.0.0.1',
+        metavar='IP',
+        help='UDP streaming destination host'
+    )
+    network_group.add_argument(
+        '--port', '--udp-port',
+        type=int,
+        default=5000,
+        metavar='PORT',
+        help='UDP streaming port'
+    )
+    network_group.add_argument(
+        '--control-port',
+        type=int,
+        default=5001,
+        metavar='PORT',
+        help='UDP control server port'
+    )
+    network_group.add_argument(
+        '--disable-control',
+        action='store_true',
+        help='Disable UDP control server'
+    )
+    
+    # General options
+    general_group = parser.add_argument_group('General Options')
+    general_group.add_argument(
+        '--verbose', '-v',
+        action='store_true',
+        help='Enable verbose output'
+    )
+    general_group.add_argument(
+        '--quiet', '-q',
+        action='store_true',
+        help='Suppress non-error output'
+    )
+    
+    # Enable tab completion
+    argcomplete.autocomplete(parser)
+    
+    args = parser.parse_args()
+    
+    # Validation
+    if args.exposure < 1.0 or args.exposure > 1000.0:
+        parser.error(f"Exposure must be between 1.0 and 1000.0 ms, got {args.exposure}")
+    
+    if args.framerate < 1.0 or args.framerate > 20200.0:
+        parser.error(f"Framerate must be between 1.0 and 20200.0 Hz, got {args.framerate}")
+    
+    if args.port < 1 or args.port > 65535:
+        parser.error(f"UDP port must be between 1 and 65535, got {args.port}")
+    
+    if args.control_port < 1 or args.control_port > 65535:
+        parser.error(f"Control port must be between 1 and 65535, got {args.control_port}")
+    
+    if args.crop_bottom < 0:
+        parser.error(f"Crop bottom must be non-negative, got {args.crop_bottom}")
+    
+    if args.no_crop:
+        args.crop_bottom = 0
+    
+    if args.verbose and args.quiet:
+        parser.error("Cannot specify both --verbose and --quiet")
+    
+    # Convert Windows paths to forward slashes for GStreamer compatibility
+    if args.config:
+        # Convert backslashes to forward slashes
+        args.config = args.config.replace('\\', '/')
+        
+        # Handle Windows drive letters (C:/ -> C:/)
+        if len(args.config) >= 3 and args.config[1:3] == ':/':
+            # Already in correct format
+            pass
+        elif len(args.config) >= 2 and args.config[1] == ':':
+            # Convert C: to C:/
+            args.config = args.config[0] + ':/' + args.config[2:].lstrip('/')
+    
+    # Check if config file exists (using original path format for file system check)
+    config_check_path = args.config.replace('/', os.sep) if args.config else None
+    if config_check_path and not os.path.exists(config_check_path):
+        if not args.quiet:
+            print(f"WARNING: Config file '{config_check_path}' does not exist")
+            print("Camera will use default settings")
+    
+    return args
+
+
+# Parse command line arguments
+args = parse_arguments()
+
 Gst.init(None)
 
 pipeline = Gst.Pipeline()
 
 src = Gst.ElementFactory.make("idsueyesrc", "src")
-src.set_property("config-file", "ini/100fps-10exp-2456x4pix-500top-cw-extragain.ini")
+src.set_property("config-file", args.config)
 
-# Exposure in milliseconds (e.g., 10)
-src.set_property("exposure", 10)
+# Exposure in milliseconds
+src.set_property("exposure", args.exposure)
 
 # Frame rate
-src.set_property("framerate", 750)
+src.set_property("framerate", args.framerate)
 
-# Video crop to remove bottom 3 pixels
-videocrop = Gst.ElementFactory.make("videocrop", "crop")
-videocrop.set_property("bottom", 3)
+# Video crop to remove bottom pixels (if enabled)
+elements_to_link = [src]
+if args.crop_bottom > 0:
+    videocrop = Gst.ElementFactory.make("videocrop", "crop")
+    videocrop.set_property("bottom", args.crop_bottom)
+    elements_to_link.append(videocrop)
 
 # Queue for buffering
 queue = Gst.ElementFactory.make("queue", "queue")
+if args.queue_size is not None:
+    queue.set_property("max-size-buffers", args.queue_size)
 
 # UDP sink to send the raw data
 udpsink = Gst.ElementFactory.make("udpsink", "sink")
-udpsink.set_property("host", "127.0.0.1")
-udpsink.set_property("port", 5000)
+udpsink.set_property("host", args.host)
+udpsink.set_property("port", args.port)
 
-# Add elements to pipeline
+# Add elements to pipeline and build dynamic linking chain
 pipeline.add(src)
-pipeline.add(videocrop)
-pipeline.add(queue)
-pipeline.add(udpsink)
+elements_to_link.append(queue)
+elements_to_link.append(udpsink)
 
-# Link elements: src -> videocrop -> queue -> udpsink
-if not src.link(videocrop):
-    print("ERROR: Failed to link src to videocrop")
-    exit(1)
-if not videocrop.link(queue):
-    print("ERROR: Failed to link videocrop to queue")
-    exit(1)
-if not queue.link(udpsink):
-    print("ERROR: Failed to link queue to udpsink")
-    exit(1)
+for element in elements_to_link[1:]:  # Skip src which is already added
+    pipeline.add(element)
 
-print("Pipeline created successfully")
-print(f"Video stream: UDP port 5000 (host: 127.0.0.1)")
-print("Pipeline: idsueyesrc -> videocrop (bottom=3) -> queue -> udpsink")
-print()
+# Link elements dynamically based on pipeline configuration
+for i in range(len(elements_to_link) - 1):
+    if not elements_to_link[i].link(elements_to_link[i + 1]):
+        element_names = [elem.get_name() for elem in elements_to_link]
+        print(f"ERROR: Failed to link {element_names[i]} to {element_names[i + 1]}")
+        exit(1)
+
+# Build pipeline description for output
+pipeline_description = " -> ".join([elem.get_name() for elem in elements_to_link])
+if args.crop_bottom > 0:
+    pipeline_description = pipeline_description.replace("crop", f"videocrop(bottom={args.crop_bottom})")
+
+if not args.quiet:
+    print("=" * 60)
+    print("IDS uEye Camera - Pipeline Configuration")
+    print("=" * 60)
+    print(f"Camera config:  {args.config}")
+    print(f"Exposure:       {args.exposure} ms")
+    print(f"Framerate:      {args.framerate} Hz")
+    if args.crop_bottom > 0:
+        print(f"Crop bottom:    {args.crop_bottom} pixels")
+    else:
+        print(f"Crop:           disabled")
+    if args.queue_size is not None:
+        print(f"Queue size:     {args.queue_size} buffers")
+    print()
+    print(f"Video stream:   UDP {args.host}:{args.port}")
+    if not args.disable_control:
+        print(f"Control port:   UDP 0.0.0.0:{args.control_port}")
+    else:
+        print(f"Control:        disabled")
+    print()
+    print(f"Pipeline:       {pipeline_description}")
+    print("=" * 60)
+    print()
 
 # Create and start control server
-control_server = ControlServer(src, pipeline, port=5001)
-control_server.start()
+if not args.disable_control:
+    control_server = ControlServer(src, pipeline, port=args.control_port)
+    control_server.start()
+else:
+    control_server = None
+    if args.verbose:
+        print("Control server disabled")
 
 # Start the pipeline
 ret = pipeline.set_state(Gst.State.PLAYING)
@@ -300,9 +502,10 @@ if ret == Gst.StateChangeReturn.FAILURE:
     print("ERROR: Unable to set the pipeline to the playing state")
     exit(1)
 
-print()
-print("Pipeline is PLAYING...")
-print("Press Ctrl+C to stop")
+if not args.quiet:
+    print()
+    print("Pipeline is PLAYING...")
+    print("Press Ctrl+C to stop")
 
 # Wait until error or EOS
 bus = pipeline.get_bus()
@@ -326,7 +529,7 @@ try:
                 print("End-Of-Stream reached")
                 break
             elif t == Gst.MessageType.STATE_CHANGED:
-                if msg.src == pipeline:
+                if msg.src == pipeline and args.verbose:
                     old_state, new_state, pending_state = msg.parse_state_changed()
                     print(f"Pipeline state changed from {old_state.value_nick} to {new_state.value_nick}")
 
@@ -334,8 +537,12 @@ except KeyboardInterrupt:
     print("\nInterrupted by user")
 
 # Cleanup
-print("Stopping control server...")
-control_server.stop()
-print("Stopping pipeline...")
+if not args.quiet:
+    print("Stopping control server...")
+if control_server:
+    control_server.stop()
+if not args.quiet:
+    print("Stopping pipeline...")
 pipeline.set_state(Gst.State.NULL)
-print("Pipeline stopped")
+if not args.quiet:
+    print("Pipeline stopped")
