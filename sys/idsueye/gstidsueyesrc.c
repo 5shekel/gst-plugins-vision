@@ -74,7 +74,8 @@ enum
   PROP_TIMEOUT,
   PROP_EXPOSURE,
   PROP_FRAMERATE,
-  PROP_GAIN
+  PROP_GAIN,
+  PROP_AUTO_EXPOSURE
 };
 
 #define DEFAULT_PROP_CAMERA_ID 0
@@ -85,6 +86,7 @@ enum
 #define DEFAULT_PROP_EXPOSURE 0
 #define DEFAULT_PROP_FRAMERATE 0
 #define DEFAULT_PROP_GAIN 0
+#define DEFAULT_PROP_AUTO_EXPOSURE FALSE
 
 /* pad templates */
 
@@ -169,6 +171,10 @@ gst_idsueyesrc_class_init (GstIdsueyeSrcClass * klass)
           "Master gain (0-100, 0 for auto)", 0, 100,
           DEFAULT_PROP_GAIN,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+  g_object_class_install_property (gobject_class, PROP_AUTO_EXPOSURE,
+      g_param_spec_boolean ("auto-exposure", "Auto Exposure",
+          "Enable automatic exposure control", DEFAULT_PROP_AUTO_EXPOSURE,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 }
 
 static void
@@ -204,6 +210,7 @@ gst_idsueyesrc_init (GstIdsueyeSrc * src)
   src->exposure = DEFAULT_PROP_EXPOSURE;
   src->framerate = DEFAULT_PROP_FRAMERATE;
   src->gain = DEFAULT_PROP_GAIN;
+  src->auto_exposure = DEFAULT_PROP_AUTO_EXPOSURE;
 
   src->stop_requested = FALSE;
   src->caps = NULL;
@@ -259,6 +266,12 @@ gst_idsueyesrc_set_property (GObject * object, guint property_id,
         }
       }
       break;
+    case PROP_AUTO_EXPOSURE:
+      src->auto_exposure = g_value_get_boolean (value);
+      if (src->is_started) {
+        gst_idsueyesrc_set_framerate_exposure (src);
+      }
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -298,6 +311,9 @@ gst_idsueyesrc_get_property (GObject * object, guint property_id,
       break;
     case PROP_GAIN:
       g_value_set_int (value, src->gain);
+      break;
+    case PROP_AUTO_EXPOSURE:
+      g_value_set_boolean (value, src->auto_exposure);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -925,12 +941,34 @@ gst_idsueyesrc_set_framerate_exposure (GstIdsueyeSrc * src)
     success = FALSE;
   }
 
-  ret =
-      is_Exposure (src->hCam, IS_EXPOSURE_CMD_SET_EXPOSURE, &src->exposure, 8);
-  if (ret != IS_SUCCESS) {
-    GST_WARNING_OBJECT (src, "Failed to set exposure to %.3f (error %d)",
-        src->exposure, ret);
-    success = FALSE;
+  /* Handle auto-exposure */
+  if (src->auto_exposure) {
+    /* Enable auto shutter (auto exposure) */
+    double enable = 1.0;
+    ret = is_SetAutoParameter (src->hCam, IS_SET_ENABLE_AUTO_SHUTTER,
+        &enable, NULL);
+    if (ret != IS_SUCCESS) {
+      GST_WARNING_OBJECT (src, "Failed to enable auto exposure (error %d)", ret);
+      success = FALSE;
+    } else {
+      GST_DEBUG_OBJECT (src, "Auto exposure enabled");
+    }
+  } else {
+    /* Disable auto shutter and set manual exposure */
+    double disable = 0.0;
+    ret = is_SetAutoParameter (src->hCam, IS_SET_ENABLE_AUTO_SHUTTER,
+        &disable, NULL);
+    if (ret != IS_SUCCESS) {
+      GST_WARNING_OBJECT (src, "Failed to disable auto exposure (error %d)", ret);
+    }
+    
+    /* Set manual exposure */
+    ret = is_Exposure (src->hCam, IS_EXPOSURE_CMD_SET_EXPOSURE, &src->exposure, 8);
+    if (ret != IS_SUCCESS) {
+      GST_WARNING_OBJECT (src, "Failed to set exposure to %.3f (error %d)",
+          src->exposure, ret);
+      success = FALSE;
+    }
   }
 
   /* Set gain if specified (0 means use default/auto) */

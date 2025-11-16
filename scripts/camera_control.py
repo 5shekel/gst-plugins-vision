@@ -15,6 +15,8 @@ Usage:
   uv run scripts/camera_control.py set-framerate 30   # Set framerate to 30fps
   uv run scripts/camera_control.py get-gain           # Get current gain
   uv run scripts/camera_control.py set-gain 50        # Set gain to 50
+  uv run scripts/camera_control.py get-auto-exposure  # Get auto-exposure status
+  uv run scripts/camera_control.py set-auto-exposure 1 # Enable auto-exposure
   uv run scripts/camera_control.py status             # Get pipeline status
 
 This script provides both individual control commands and full test suite functionality
@@ -182,6 +184,8 @@ Examples:
   %(prog)s set-framerate 30                # Set framerate to 30fps
   %(prog)s get-gain                        # Get current gain
   %(prog)s set-gain 50                     # Set gain to 50
+  %(prog)s get-auto-exposure               # Get auto-exposure status
+  %(prog)s set-auto-exposure 1             # Enable auto-exposure
   %(prog)s status                          # Get pipeline status
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -190,7 +194,7 @@ Examples:
     parser.add_argument('command',
                         nargs='?',
                         choices=['test', 'get-exposure', 'set-exposure', 'get-framerate', 'set-framerate',
-                                'get-gain', 'set-gain', 'status'],
+                                'get-gain', 'set-gain', 'get-auto-exposure', 'set-auto-exposure', 'status'],
                         help='Command to execute')
     
     parser.add_argument('value',
@@ -258,6 +262,22 @@ Examples:
             print("Error: Gain must be between 0 and 100 (0 for auto)")
             sys.exit(1)
         success = simple_command(f"SET_GAIN {gain_value}", f"Setting gain to {gain_value}")
+        
+    elif args.command == 'get-auto-exposure':
+        success = simple_command("GET_AUTO_EXPOSURE", "Getting auto-exposure status")
+        
+    elif args.command == 'set-auto-exposure':
+        if args.value is None:
+            print("Error: set-auto-exposure requires a value (0=off, 1=on)")
+            parser.print_help()
+            sys.exit(1)
+        # Convert to int
+        ae_value = int(args.value)
+        if ae_value not in [0, 1]:
+            print("Error: Auto-exposure must be 0 (off) or 1 (on)")
+            sys.exit(1)
+        success = simple_command(f"SET_AUTO_EXPOSURE {ae_value}",
+                                f"{'Enabling' if ae_value else 'Disabling'} auto-exposure")
         
     elif args.command == 'status':
         success = simple_command("STATUS", "Getting pipeline status")
