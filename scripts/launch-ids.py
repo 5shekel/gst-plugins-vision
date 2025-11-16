@@ -27,6 +27,8 @@
 #   - Optional control interface (default: UDP port 5001 on 0.0.0.0)
 #   - Dynamic exposure control (1.0-1000.0 milliseconds, default: 10ms)
 #   - Dynamic framerate control (1-20000 fps, default: 750fps)
+#   - Dynamic camera ID selection (0-254, default: 0 for first found)
+#   - Dynamic device ID selection (0-254, system enumeration ID)
 #   - Configurable video cropping (default: crop 3 pixels from bottom)
 #   - Verbose/quiet output modes
 #   - Custom camera configuration files
@@ -36,6 +38,10 @@
 #   GET_EXPOSURE          - Get current exposure value
 #   SET_FRAMERATE <value> - Set framerate in Hz (e.g., 30)
 #   GET_FRAMERATE         - Get current framerate
+#   SET_CAMERA_ID <value> - Set camera ID (0-254, 0 is first found)
+#   GET_CAMERA_ID         - Get current camera ID
+#   SET_DEVICE_ID <value> - Set device ID (0-254, system enumeration)
+#   GET_DEVICE_ID         - Get current device ID
 #   STATUS                - Get pipeline status and current settings
 #
 # Example Control Usage:
@@ -124,7 +130,8 @@ class ControlServer:
                 return
             
             print(f"Control server listening on UDP port {self.port}")
-            print("  Commands: SET_EXPOSURE <val>, GET_EXPOSURE, SET_FRAMERATE <val>, GET_FRAMERATE, STATUS")
+            print("  Commands: SET_EXPOSURE <val>, GET_EXPOSURE, SET_FRAMERATE <val>, GET_FRAMERATE,")
+            print("            SET_CAMERA_ID <val>, GET_CAMERA_ID, SET_DEVICE_ID <val>, GET_DEVICE_ID, STATUS")
             
             while self.running:
                 try:
@@ -170,6 +177,14 @@ class ControlServer:
                 return self.handle_set_framerate(parts)
             elif cmd == "GET_FRAMERATE":
                 return self.handle_get_framerate()
+            elif cmd == "SET_CAMERA_ID":
+                return self.handle_set_camera_id(parts)
+            elif cmd == "GET_CAMERA_ID":
+                return self.handle_get_camera_id()
+            elif cmd == "SET_DEVICE_ID":
+                return self.handle_set_device_id(parts)
+            elif cmd == "GET_DEVICE_ID":
+                return self.handle_get_device_id()
             elif cmd == "STATUS":
                 return self.handle_status()
             else:
@@ -233,11 +248,67 @@ class ControlServer:
         except Exception as e:
             return f"ERROR: {str(e)}"
     
+    def handle_set_camera_id(self, parts):
+        """Handle SET_CAMERA_ID command"""
+        if len(parts) != 2:
+            return "ERROR INVALID_SYNTAX: Usage: SET_CAMERA_ID <value>"
+        
+        try:
+            value = int(parts[1])
+            if value < 0 or value > 254:
+                return "ERROR OUT_OF_RANGE: Camera ID must be 0-254"
+            
+            self.src.set_property("camera-id", value)
+            actual = self.src.get_property("camera-id")
+            return f"OK {actual}"
+        
+        except ValueError:
+            return "ERROR INVALID_SYNTAX: Camera ID must be an integer"
+        except Exception as e:
+            return f"ERROR: {str(e)}"
+    
+    def handle_get_camera_id(self):
+        """Handle GET_CAMERA_ID command"""
+        try:
+            value = self.src.get_property("camera-id")
+            return f"OK {value}"
+        except Exception as e:
+            return f"ERROR: {str(e)}"
+    
+    def handle_set_device_id(self, parts):
+        """Handle SET_DEVICE_ID command"""
+        if len(parts) != 2:
+            return "ERROR INVALID_SYNTAX: Usage: SET_DEVICE_ID <value>"
+        
+        try:
+            value = int(parts[1])
+            if value < 0 or value > 254:
+                return "ERROR OUT_OF_RANGE: Device ID must be 0-254"
+            
+            self.src.set_property("device-id", value)
+            actual = self.src.get_property("device-id")
+            return f"OK {actual}"
+        
+        except ValueError:
+            return "ERROR INVALID_SYNTAX: Device ID must be an integer"
+        except Exception as e:
+            return f"ERROR: {str(e)}"
+    
+    def handle_get_device_id(self):
+        """Handle GET_DEVICE_ID command"""
+        try:
+            value = self.src.get_property("device-id")
+            return f"OK {value}"
+        except Exception as e:
+            return f"ERROR: {str(e)}"
+    
     def handle_status(self):
         """Handle STATUS command"""
         try:
             exposure = self.src.get_property("exposure")
             framerate = self.src.get_property("framerate")
+            camera_id = self.src.get_property("camera-id")
+            device_id = self.src.get_property("device-id")
             
             # Get pipeline state
             state = "UNKNOWN"
@@ -245,7 +316,7 @@ class ControlServer:
                 _, current_state, _ = self.pipeline.get_state(0)
                 state = current_state.value_nick.upper()
             
-            return f"OK exposure={exposure} framerate={framerate} state={state}"
+            return f"OK exposure={exposure} framerate={framerate} camera_id={camera_id} device_id={device_id} state={state}"
         except Exception as e:
             return f"ERROR: {str(e)}"
     
@@ -296,6 +367,20 @@ Examples:
         default=750.0,
         metavar='HZ',
         help='Camera framerate in Hz (1.0-20200.0)'
+    )
+    camera_group.add_argument(
+        '--camera-id',
+        type=int,
+        default=0,
+        metavar='ID',
+        help='Camera ID (0 is first found, 0-254)'
+    )
+    camera_group.add_argument(
+        '--device-id',
+        type=int,
+        default=0,
+        metavar='ID',
+        help='Device ID (system enumeration, 0 is first, 0-254)'
     )
     
     # Video processing
@@ -379,6 +464,12 @@ Examples:
     if args.framerate < 1.0 or args.framerate > 20200.0:
         parser.error(f"Framerate must be between 1.0 and 20200.0 Hz, got {args.framerate}")
     
+    if args.camera_id < 0 or args.camera_id > 254:
+        parser.error(f"Camera ID must be between 0 and 254, got {args.camera_id}")
+    
+    if args.device_id < 0 or args.device_id > 254:
+        parser.error(f"Device ID must be between 0 and 254, got {args.device_id}")
+    
     if args.port < 1 or args.port > 65535:
         parser.error(f"UDP port must be between 1 and 65535, got {args.port}")
     
@@ -432,6 +523,10 @@ src.set_property("exposure", args.exposure)
 
 # Frame rate
 src.set_property("framerate", args.framerate)
+
+# Camera ID and Device ID
+src.set_property("camera-id", args.camera_id)
+src.set_property("device-id", args.device_id)
 
 # Video crop to remove bottom pixels (if enabled)
 elements_to_link = [src]
@@ -572,6 +667,8 @@ if not args.quiet:
     print("IDS uEye Camera - Pipeline Configuration")
     print("=" * 60)
     print(f"Camera config:  {args.config}")
+    print(f"Camera ID:      {args.camera_id}")
+    print(f"Device ID:      {args.device_id}")
     print(f"Exposure:       {args.exposure} ms")
     print(f"Framerate:      {args.framerate} Hz")
     if args.crop_bottom > 0:

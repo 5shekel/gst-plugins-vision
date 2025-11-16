@@ -68,6 +68,7 @@ enum
 {
   PROP_0,
   PROP_CAMERA_ID,
+  PROP_DEVICE_ID,
   PROP_CONFIG_FILE,
   PROP_NUM_CAPTURE_BUFFERS,
   PROP_TIMEOUT,
@@ -76,6 +77,7 @@ enum
 };
 
 #define DEFAULT_PROP_CAMERA_ID 0
+#define DEFAULT_PROP_DEVICE_ID 0
 #define DEFAULT_PROP_CONFIG_FILE ""
 #define DEFAULT_PROP_NUM_CAPTURE_BUFFERS 3
 #define DEFAULT_PROP_TIMEOUT 1000
@@ -131,6 +133,10 @@ gst_idsueyesrc_class_init (GstIdsueyeSrcClass * klass)
       g_param_spec_int ("camera-id", "Camera ID",
           "Camera ID (0 is first found)", 0, 254, DEFAULT_PROP_CAMERA_ID,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+  g_object_class_install_property (gobject_class, PROP_DEVICE_ID,
+      g_param_spec_int ("device-id", "Device ID",
+          "Device ID (system enumeration, 0 is first)", 0, 254, DEFAULT_PROP_DEVICE_ID,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
   g_object_class_install_property (gobject_class, PROP_CONFIG_FILE,
       g_param_spec_string ("config-file", "Config file",
           "Filepath of the uEye parameter file (*.ini)",
@@ -184,6 +190,7 @@ gst_idsueyesrc_init (GstIdsueyeSrc * src)
 
   /* initialize member variables */
   src->camera_id = DEFAULT_PROP_CAMERA_ID;
+  src->device_id = DEFAULT_PROP_DEVICE_ID;
   src->config_file = g_strdup (DEFAULT_PROP_CONFIG_FILE);
   src->num_capture_buffers = DEFAULT_PROP_NUM_CAPTURE_BUFFERS;
   src->timeout = DEFAULT_PROP_TIMEOUT;
@@ -207,6 +214,9 @@ gst_idsueyesrc_set_property (GObject * object, guint property_id,
   switch (property_id) {
     case PROP_CAMERA_ID:
       src->camera_id = g_value_get_int (value);
+      break;
+    case PROP_DEVICE_ID:
+      src->device_id = g_value_get_int (value);
       break;
     case PROP_CONFIG_FILE:
       g_free (src->config_file);
@@ -248,6 +258,9 @@ gst_idsueyesrc_get_property (GObject * object, guint property_id,
   switch (property_id) {
     case PROP_CAMERA_ID:
       g_value_set_int (value, src->camera_id);
+      break;
+    case PROP_DEVICE_ID:
+      g_value_set_int (value, src->device_id);
       break;
     case PROP_CONFIG_FILE:
       g_value_set_string (value, src->config_file);
@@ -482,7 +495,12 @@ gst_idsueyesrc_start (GstBaseSrc * bsrc)
     g_free (pucl);
   }
 
-  src->hCam = src->camera_id;
+  /* Use device-id if set (non-zero), otherwise use camera-id */
+  if (src->device_id != 0) {
+    src->hCam = (src->device_id) | IS_USE_DEVICE_ID;
+  } else {
+    src->hCam = src->camera_id;
+  }
   ret = is_InitCamera (&src->hCam, NULL);
   if (ret != IS_SUCCESS) {
     GST_ELEMENT_ERROR (src, RESOURCE, FAILED,

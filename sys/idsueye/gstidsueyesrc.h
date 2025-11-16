@@ -51,6 +51,7 @@ struct _GstIdsueyeSrc
 
   /* properties */
   gint camera_id;
+  gint device_id;
   gchar *config_file;
   gint num_capture_buffers;
   gint timeout;
