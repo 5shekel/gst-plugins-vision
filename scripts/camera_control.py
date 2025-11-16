@@ -11,7 +11,7 @@ Usage:
   uv run scripts/camera_control.py                    # Get all camera settings (default)
   uv run scripts/camera_control.py get-all            # Get all camera settings
   uv run scripts/camera_control.py exposure           # Get current exposure
-  uv run scripts/camera_control.py exposure 10        # Set exposure to 10ms
+  uv run scripts/camera_control.py exposure 10        # Set exposure to 10ms (range: 0.015-30000ms)
   uv run scripts/camera_control.py framerate          # Get current framerate
   uv run scripts/camera_control.py framerate 30       # Set framerate to 30fps
   uv run scripts/camera_control.py gain               # Get current gain
@@ -107,7 +107,7 @@ Examples:
   %(prog)s                                 # Get all camera settings (default)
   %(prog)s get-all                         # Get all camera settings
   %(prog)s exposure                        # Get current exposure
-  %(prog)s exposure 10                     # Set exposure to 10ms
+  %(prog)s exposure 10                     # Set exposure to 10ms (range: 0.015-30000ms)
   %(prog)s framerate                       # Get current framerate
   %(prog)s framerate 30                    # Set framerate to 30fps
   %(prog)s gain                            # Get current gain
@@ -175,6 +175,12 @@ Examples:
             # Set exposure
             try:
                 exposure_value = float(args.value)
+                if exposure_value < 0.015:
+                    print(f"Error: Exposure must be at least 0.015ms (requested: {exposure_value}ms)")
+                    sys.exit(1)
+                if exposure_value > 30000:
+                    print(f"Error: Exposure must be at most 30000ms (requested: {exposure_value}ms)")
+                    sys.exit(1)
                 success = simple_command(f"SET_EXPOSURE {exposure_value}",
                                        f"Setting exposure to {exposure_value}ms",
                                        host=args.host, port=args.port, timeout=args.timeout)

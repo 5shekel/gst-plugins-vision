@@ -237,7 +237,7 @@ class ControlServer:
         
         try:
             value = float(parts[1])
-            if value < 1.0 or value > 30000:
+            if value < 0.015 or value > 30000:
                 return "ERROR OUT_OF_RANGE: Exposure must be 0.015-30000 milliseconds"
             
             self.src.set_property("exposure", value)
