@@ -3,9 +3,6 @@
 GStreamer plugins for IDS uEye cameras with frame analysis capabilities.
 
 #### TODO
- - []  idsueyesrc doesnt respect auto exposure set in ini file. need to be set in filter  `exposure=0.5`
- - []  
-
 
 ## Supported Elements
 
@@ -23,25 +20,28 @@ GStreamer plugins for IDS uEye cameras with frame analysis capabilities.
 gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! queue ! autovideosink
 ```
 
-## WIP - Frame filtering based on column analysis
-Drop frames when column mean deviates from rolling baseline by more than 0.5:
-```powershell
-gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=1000 column-index=1 threshold=0.5 ! queue ! autovideosink
-```
-
-**Note:** The `rollingsum` element analyzes a single column of pixels and drops frames when the column mean deviates from the rolling mean baseline by more than the threshold. Use `videoconvert` to ensure proper format negotiation.
-
 ## Network Streaming
 
 ### Quick Start - Single Line Transmission (2456x1)
 
 #### Send Single Line via UDP
 Extract and transmit one line from camera (daytime, 200fps):
-```powershell
-gst-launch-1.0 idsueyesrc config-file=ini/100fps-10exp-2456x4pix-500top-cw-extragain.ini  exposure=5 framerate=200 `
-    ! videocrop bottom=3 `
-    ! queue `
-    ! udpsink host=127.0.0.1 port=5000
+```pwsh
+gst-launch-1.0 idsueyesrc config-file=ini/100fps-10exp-2456x4pix-500top-cw-extragain.ini exposure=10 framerate=750 ! `
+videocrop bottom=3 ! `
+queue ! `
+udpsink host=10.81.2.183 port=5000
+```
+now moving to 
+```pwsh
+uv run .\scripts\launch-ids.py `
+    --config .\ini\2456x4pix-500top-cw.ini `
+    --device-id 1 `
+    --framerate 750 `
+    --gain 52 `
+    --gain-boost `
+    --exposure 10 `
+    --host 10.81.2.183 
 ```
 
 #### Receive and Display
@@ -75,6 +75,18 @@ gst-launch-1.0 -v `
     videoconvert ! `
     autovideosink
 ```
+moving to 
+```pwsh
+uv run .\scripts\launch-ids.py --config .\ini\100fps-10exp-2456x4pix-500top-cw-extragain.ini --device-id 1 --framerate 750 --exposure 10 --host 10.81.2.183 --gain 52 
+```
+
+## WIP - Frame filtering based on column analysis
+Drop frames when column mean deviates from rolling baseline by more than 0.5:
+```powershell
+gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=1000 column-index=1 threshold=0.5 ! queue ! autovideosink
+```
+
+**Note:** The `rollingsum` element analyzes a single column of pixels and drops frames when the column mean deviates from the rolling mean baseline by more than the threshold. Use `videoconvert` to ensure proper format negotiation.
 
 ## Dependencies
 
