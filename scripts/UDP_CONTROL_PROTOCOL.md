@@ -268,14 +268,14 @@ $udpClient.Close()
 
 ## Testing
 
-A test client script is provided: `scripts/test_exposure_control.py`
+A test client script is provided: `scripts/camera_control.py`
 
 ```bash
 # Run the camera pipeline
 uv run scripts/launch-ids.py
 
 # In another terminal, test exposure control
-uv run scripts/test_exposure_control.py
+uv run scripts/camera_control.py
 ```
 
 ## Future Enhancements

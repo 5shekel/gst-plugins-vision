@@ -71,11 +71,11 @@ echo "STATUS" | nc -u 127.0.0.1 5001
 
 ### Testing the Control Interface
 
-See [`scripts/test_exposure_control.py`](scripts/test_exposure_control.py) for automated testing.
+See [`scripts/camera_control.py`](scripts/camera_control.py) for automated testing.
 
 ```pwsh
 # Run comprehensive test suite (15 tests)
-uv run .\scripts\test_exposure_control.py
+uv run .\scripts\camera_control.py
 ```
 
 **Test Coverage:**
