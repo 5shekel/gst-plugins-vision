@@ -978,12 +978,52 @@ gst_idsueyesrc_set_framerate_exposure (GstIdsueyeSrc * src)
       GST_WARNING_OBJECT (src, "Failed to disable auto exposure (error %d)", ret);
     }
     
-    /* Set manual exposure */
-    ret = is_Exposure (src->hCam, IS_EXPOSURE_CMD_SET_EXPOSURE, &src->exposure, 8);
-    if (ret != IS_SUCCESS) {
-      GST_WARNING_OBJECT (src, "Failed to set exposure to %.3f (error %d)",
-          src->exposure, ret);
-      success = FALSE;
+    /* Query exposure range to validate requested value */
+    double exposure_range[3];  /* [min, max, increment] */
+    ret = is_Exposure (src->hCam, IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE,
+        exposure_range, sizeof(exposure_range));
+    
+    if (ret == IS_SUCCESS) {
+      double exposure_to_set = src->exposure;
+      
+      /* Clamp exposure value to valid range */
+      if (exposure_to_set < exposure_range[0]) {
+        GST_DEBUG_OBJECT (src, "Requested exposure %.3f ms below minimum %.3f ms, clamping",
+            exposure_to_set, exposure_range[0]);
+        exposure_to_set = exposure_range[0];
+      } else if (exposure_to_set > exposure_range[1]) {
+        GST_DEBUG_OBJECT (src, "Requested exposure %.3f ms above maximum %.3f ms, clamping",
+            exposure_to_set, exposure_range[1]);
+        exposure_to_set = exposure_range[1];
+      }
+      
+      /* Set manual exposure with validated value */
+      ret = is_Exposure (src->hCam, IS_EXPOSURE_CMD_SET_EXPOSURE,
+          &exposure_to_set, sizeof(double));
+      if (ret != IS_SUCCESS) {
+        GST_WARNING_OBJECT (src, "Failed to set exposure to %.3f ms (error %d)",
+            exposure_to_set, ret);
+        success = FALSE;
+      } else {
+        GST_DEBUG_OBJECT (src, "Set exposure to %.3f ms (requested: %.3f ms, range: %.3f-%.3f ms, inc: %.3f ms)",
+            exposure_to_set, src->exposure, exposure_range[0], exposure_range[1], exposure_range[2]);
+        /* Update property with actual set value if different */
+        if (exposure_to_set != src->exposure) {
+          src->exposure = exposure_to_set;
+        }
+      }
+    } else {
+      GST_WARNING_OBJECT (src, "Failed to query exposure range (error %d), attempting to set anyway",
+          ret);
+      /* Fallback: try to set without validation */
+      double exposure_to_set = src->exposure;
+      ret = is_Exposure (src->hCam, IS_EXPOSURE_CMD_SET_EXPOSURE,
+          &exposure_to_set, sizeof(double));
+      if (ret != IS_SUCCESS) {
+        GST_WARNING_OBJECT (src, "Failed to set exposure to %.3f ms (error %d)",
+            exposure_to_set, ret);
+        success = FALSE;
+      }
     }
   }
 

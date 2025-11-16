@@ -197,8 +197,9 @@ Examples:
     
     parser.add_argument('command',
                         nargs='?',
-                        choices=['test', 'get-exposure', 'set-exposure', 'get-framerate', 'set-framerate',
-                                'get-gain', 'set-gain', 'get-auto-exposure', 'set-auto-exposure',
+                        choices=['test', 'get-exposure', 'get-exposure-range', 'set-exposure',
+                                'get-framerate', 'set-framerate', 'get-gain', 'set-gain',
+                                'get-auto-exposure', 'set-auto-exposure',
                                 'get-auto-gain', 'set-auto-gain', 'status'],
                         help='Command to execute')
     
@@ -235,6 +236,9 @@ Examples:
     # Handle individual commands
     if args.command == 'get-exposure':
         success = simple_command("GET_EXPOSURE", "Getting current exposure")
+        
+    elif args.command == 'get-exposure-range':
+        success = simple_command("GET_EXPOSURE_RANGE", "Getting exposure range")
         
     elif args.command == 'set-exposure':
         if args.value is None:

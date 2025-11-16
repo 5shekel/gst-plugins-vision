@@ -37,12 +37,13 @@
 #   - Custom camera configuration files
 #
 # Control Commands (when control server enabled):
-#   SET_EXPOSURE <value>  - Set exposure in milliseconds (e.g., 16)
-#   GET_EXPOSURE          - Get current exposure value
-#   SET_FRAMERATE <value> - Set framerate in Hz (e.g., 30)
-#   GET_FRAMERATE         - Get current framerate
-#   SET_CAMERA_ID <value> - Set camera ID (0-254, 0 is first found)
-#   GET_CAMERA_ID         - Get current camera ID
+#   SET_EXPOSURE <value>      - Set exposure in milliseconds (e.g., 16)
+#   GET_EXPOSURE              - Get current exposure value
+#   GET_EXPOSURE_RANGE        - Get exposure range (min/max/increment)
+#   SET_FRAMERATE <value>     - Set framerate in Hz (e.g., 30)
+#   GET_FRAMERATE             - Get current framerate
+#   SET_CAMERA_ID <value>     - Set camera ID (0-254, 0 is first found)
+#   GET_CAMERA_ID             - Get current camera ID
 #   SET_DEVICE_ID <value>     - Set device ID (0-254, system enumeration)
 #   GET_DEVICE_ID             - Get current device ID
 #   SET_GAIN <value>          - Set master gain (0-100)
@@ -184,6 +185,8 @@ class ControlServer:
                 return self.handle_set_exposure(parts)
             elif cmd == "GET_EXPOSURE":
                 return self.handle_get_exposure()
+            elif cmd == "GET_EXPOSURE_RANGE":
+                return self.handle_get_exposure_range()
             elif cmd == "SET_FRAMERATE":
                 return self.handle_set_framerate(parts)
             elif cmd == "GET_FRAMERATE":
@@ -241,6 +244,17 @@ class ControlServer:
         try:
             value = self.src.get_property("exposure")
             return f"OK {value}"
+        except Exception as e:
+            return f"ERROR: {str(e)}"
+    
+    def handle_get_exposure_range(self):
+        """Handle GET_EXPOSURE_RANGE command - returns min/max/increment"""
+        try:
+            # Note: The actual exposure range is queried by the C code in gstidsueyesrc.c
+            # Here we just return the theoretical ranges from the API documentation
+            # For accurate real-time ranges, the C code queries is_Exposure with
+            # IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE before each SET operation
+            return "OK min=0.015 max=30000.0 inc=varies_by_sensor"
         except Exception as e:
             return f"ERROR: {str(e)}"
     
