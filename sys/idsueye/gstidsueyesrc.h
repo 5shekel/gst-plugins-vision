@@ -57,6 +57,7 @@ struct _GstIdsueyeSrc
   gint timeout;
   gdouble exposure;
   gdouble framerate;
+  gint gain;
 
   GstClockTime acq_start_time;
   guint32 last_frame_count;

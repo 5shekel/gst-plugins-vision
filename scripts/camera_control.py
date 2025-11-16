@@ -13,6 +13,8 @@ Usage:
   uv run scripts/camera_control.py set-exposure 10    # Set exposure to 10ms
   uv run scripts/camera_control.py get-framerate      # Get current framerate
   uv run scripts/camera_control.py set-framerate 30   # Set framerate to 30fps
+  uv run scripts/camera_control.py get-gain           # Get current gain
+  uv run scripts/camera_control.py set-gain 50        # Set gain to 50
   uv run scripts/camera_control.py status             # Get pipeline status
 
 This script provides both individual control commands and full test suite functionality
@@ -178,6 +180,8 @@ Examples:
   %(prog)s set-exposure 10                 # Set exposure to 10ms
   %(prog)s get-framerate                   # Get current framerate
   %(prog)s set-framerate 30                # Set framerate to 30fps
+  %(prog)s get-gain                        # Get current gain
+  %(prog)s set-gain 50                     # Set gain to 50
   %(prog)s status                          # Get pipeline status
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -185,7 +189,8 @@ Examples:
     
     parser.add_argument('command',
                         nargs='?',
-                        choices=['test', 'get-exposure', 'set-exposure', 'get-framerate', 'set-framerate', 'status'],
+                        choices=['test', 'get-exposure', 'set-exposure', 'get-framerate', 'set-framerate',
+                                'get-gain', 'set-gain', 'status'],
                         help='Command to execute')
     
     parser.add_argument('value',
@@ -238,6 +243,21 @@ Examples:
             parser.print_help()
             sys.exit(1)
         success = simple_command(f"SET_FRAMERATE {args.value}", f"Setting framerate to {args.value}fps")
+        
+    elif args.command == 'get-gain':
+        success = simple_command("GET_GAIN", "Getting current gain")
+        
+    elif args.command == 'set-gain':
+        if args.value is None:
+            print("Error: set-gain requires a value (0-100, 0 for auto)")
+            parser.print_help()
+            sys.exit(1)
+        # Convert to int for gain
+        gain_value = int(args.value)
+        if gain_value < 0 or gain_value > 100:
+            print("Error: Gain must be between 0 and 100 (0 for auto)")
+            sys.exit(1)
+        success = simple_command(f"SET_GAIN {gain_value}", f"Setting gain to {gain_value}")
         
     elif args.command == 'status':
         success = simple_command("STATUS", "Getting pipeline status")

@@ -73,7 +73,8 @@ enum
   PROP_NUM_CAPTURE_BUFFERS,
   PROP_TIMEOUT,
   PROP_EXPOSURE,
-  PROP_FRAMERATE
+  PROP_FRAMERATE,
+  PROP_GAIN
 };
 
 #define DEFAULT_PROP_CAMERA_ID 0
@@ -83,6 +84,7 @@ enum
 #define DEFAULT_PROP_TIMEOUT 1000
 #define DEFAULT_PROP_EXPOSURE 0
 #define DEFAULT_PROP_FRAMERATE 0
+#define DEFAULT_PROP_GAIN 0
 
 /* pad templates */
 
@@ -162,6 +164,11 @@ gst_idsueyesrc_class_init (GstIdsueyeSrcClass * klass)
           "Framerate in frames per second", 0, G_MAXDOUBLE,
           DEFAULT_PROP_FRAMERATE,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+  g_object_class_install_property (gobject_class, PROP_GAIN,
+      g_param_spec_int ("gain", "Master Gain",
+          "Master gain (0-100, 0 for auto)", 0, 100,
+          DEFAULT_PROP_GAIN,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 }
 
 static void
@@ -196,6 +203,7 @@ gst_idsueyesrc_init (GstIdsueyeSrc * src)
   src->timeout = DEFAULT_PROP_TIMEOUT;
   src->exposure = DEFAULT_PROP_EXPOSURE;
   src->framerate = DEFAULT_PROP_FRAMERATE;
+  src->gain = DEFAULT_PROP_GAIN;
 
   src->stop_requested = FALSE;
   src->caps = NULL;
@@ -240,6 +248,17 @@ gst_idsueyesrc_set_property (GObject * object, guint property_id,
         gst_idsueyesrc_set_framerate_exposure (src);
       }
       break;
+    case PROP_GAIN:
+      src->gain = g_value_get_int (value);
+      if (src->is_started) {
+        INT ret = is_SetHardwareGain (src->hCam, src->gain, IS_IGNORE_PARAMETER,
+            IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
+        if (ret != IS_SUCCESS) {
+          GST_WARNING_OBJECT (src, "Failed to set gain to %d (error %d)",
+              src->gain, ret);
+        }
+      }
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       break;
@@ -276,6 +295,9 @@ gst_idsueyesrc_get_property (GObject * object, guint property_id,
       break;
     case PROP_FRAMERATE:
       g_value_set_double (value, src->framerate);
+      break;
+    case PROP_GAIN:
+      g_value_set_int (value, src->gain);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -909,6 +931,17 @@ gst_idsueyesrc_set_framerate_exposure (GstIdsueyeSrc * src)
     GST_WARNING_OBJECT (src, "Failed to set exposure to %.3f (error %d)",
         src->exposure, ret);
     success = FALSE;
+  }
+
+  /* Set gain if specified (0 means use default/auto) */
+  if (src->gain > 0) {
+    ret = is_SetHardwareGain (src->hCam, src->gain, IS_IGNORE_PARAMETER,
+        IS_IGNORE_PARAMETER, IS_IGNORE_PARAMETER);
+    if (ret != IS_SUCCESS) {
+      GST_WARNING_OBJECT (src, "Failed to set gain to %d (error %d)",
+          src->gain, ret);
+      success = FALSE;
+    }
   }
 
   return success;

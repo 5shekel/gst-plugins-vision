@@ -42,6 +42,8 @@
 #   GET_CAMERA_ID         - Get current camera ID
 #   SET_DEVICE_ID <value> - Set device ID (0-254, system enumeration)
 #   GET_DEVICE_ID         - Get current device ID
+#   SET_GAIN <value>      - Set master gain (0-100, 0 for auto)
+#   GET_GAIN              - Get current gain value
 #   STATUS                - Get pipeline status and current settings
 #
 # Example Control Usage:
@@ -131,7 +133,8 @@ class ControlServer:
             
             print(f"Control server listening on UDP port {self.port}")
             print("  Commands: SET_EXPOSURE <val>, GET_EXPOSURE, SET_FRAMERATE <val>, GET_FRAMERATE,")
-            print("            SET_CAMERA_ID <val>, GET_CAMERA_ID, SET_DEVICE_ID <val>, GET_DEVICE_ID, STATUS")
+            print("            SET_CAMERA_ID <val>, GET_CAMERA_ID, SET_DEVICE_ID <val>, GET_DEVICE_ID,")
+            print("            SET_GAIN <val>, GET_GAIN, STATUS")
             
             while self.running:
                 try:
@@ -185,6 +188,10 @@ class ControlServer:
                 return self.handle_set_device_id(parts)
             elif cmd == "GET_DEVICE_ID":
                 return self.handle_get_device_id()
+            elif cmd == "SET_GAIN":
+                return self.handle_set_gain(parts)
+            elif cmd == "GET_GAIN":
+                return self.handle_get_gain()
             elif cmd == "STATUS":
                 return self.handle_status()
             else:
@@ -302,6 +309,33 @@ class ControlServer:
         except Exception as e:
             return f"ERROR: {str(e)}"
     
+    def handle_set_gain(self, parts):
+        """Handle SET_GAIN command"""
+        if len(parts) != 2:
+            return "ERROR INVALID_SYNTAX: Usage: SET_GAIN <value>"
+        
+        try:
+            value = int(parts[1])
+            if value < 0 or value > 100:
+                return "ERROR OUT_OF_RANGE: Gain must be 0-100 (0 for auto)"
+            
+            self.src.set_property("gain", value)
+            actual = self.src.get_property("gain")
+            return f"OK {actual}"
+        
+        except ValueError:
+            return "ERROR INVALID_SYNTAX: Gain must be an integer"
+        except Exception as e:
+            return f"ERROR: {str(e)}"
+    
+    def handle_get_gain(self):
+        """Handle GET_GAIN command"""
+        try:
+            value = self.src.get_property("gain")
+            return f"OK {value}"
+        except Exception as e:
+            return f"ERROR: {str(e)}"
+    
     def handle_status(self):
         """Handle STATUS command"""
         try:
@@ -309,6 +343,7 @@ class ControlServer:
             framerate = self.src.get_property("framerate")
             camera_id = self.src.get_property("camera-id")
             device_id = self.src.get_property("device-id")
+            gain = self.src.get_property("gain")
             
             # Get pipeline state
             state = "UNKNOWN"
@@ -316,7 +351,7 @@ class ControlServer:
                 _, current_state, _ = self.pipeline.get_state(0)
                 state = current_state.value_nick.upper()
             
-            return f"OK exposure={exposure} framerate={framerate} camera_id={camera_id} device_id={device_id} state={state}"
+            return f"OK exposure={exposure} framerate={framerate} camera_id={camera_id} device_id={device_id} gain={gain} state={state}"
         except Exception as e:
             return f"ERROR: {str(e)}"
     
@@ -381,6 +416,13 @@ Examples:
         default=0,
         metavar='ID',
         help='Device ID (system enumeration, 0 is first, 0-254)'
+    )
+    camera_group.add_argument(
+        '--gain', '-g',
+        type=int,
+        default=0,
+        metavar='GAIN',
+        help='Master gain (0-100, 0 for auto/default)'
     )
     
     # Video processing
@@ -470,6 +512,9 @@ Examples:
     if args.device_id < 0 or args.device_id > 254:
         parser.error(f"Device ID must be between 0 and 254, got {args.device_id}")
     
+    if args.gain < 0 or args.gain > 100:
+        parser.error(f"Gain must be between 0 and 100, got {args.gain}")
+    
     if args.port < 1 or args.port > 65535:
         parser.error(f"UDP port must be between 1 and 65535, got {args.port}")
     
@@ -527,6 +572,9 @@ src.set_property("framerate", args.framerate)
 # Camera ID and Device ID
 src.set_property("camera-id", args.camera_id)
 src.set_property("device-id", args.device_id)
+
+# Gain (0 for auto/default)
+src.set_property("gain", args.gain)
 
 # Video crop to remove bottom pixels (if enabled)
 elements_to_link = [src]
@@ -671,6 +719,7 @@ if not args.quiet:
     print(f"Device ID:      {args.device_id}")
     print(f"Exposure:       {args.exposure} ms")
     print(f"Framerate:      {args.framerate} Hz")
+    print(f"Gain:           {args.gain} (0=auto)")
     if args.crop_bottom > 0:
         print(f"Crop bottom:    {args.crop_bottom} pixels")
     else:
