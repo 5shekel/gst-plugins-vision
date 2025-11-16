@@ -54,68 +54,8 @@ macro_log_feature(GOBJECT_FOUND "GObject" "Required to build gst-plugins-vision"
 find_package(Orc REQUIRED)
 macro_log_feature(ORC_FOUND "Orc" "Required library to improve performance" "http://code.entropywave.com/orc/" TRUE)
 
-find_package(Bitflow)
-macro_log_feature(BITFLOW_FOUND "BitFlow" "Required to build BitFlow source element" "http://www.bitflow.com/" FALSE)
-
-find_package(NIIMAQ)
-macro_log_feature(NIIMAQ_FOUND "NI-IMAQ" "Required to build National Instruments IMAQ source element" "http://www.ni.com/" FALSE)
-
-find_package(NIIMAQdx)
-macro_log_feature(NIIMAQDX_FOUND "NI-IMAQdx" "Required to build National Instruments IMAQdx source element" "http://www.ni.com/" FALSE)
-
-find_package(FreeImage)
-macro_log_feature(FREEIMAGE_FOUND "FreeImage" "Required to build FreeImage plugin" "http://freeimage.sourceforge.net/" FALSE)
-
-find_package(OpenCV)
-macro_log_feature(OPENCV_FOUND "OpenCV" "Required to build sensorfx plugin" "http://opencv.willowgarage.com/" FALSE)
-
-find_package(Aptina)
-macro_log_feature(APTINA_FOUND "Aptina" "Required to build aptinasrc source element" "http://www.onsemi.com/" FALSE)
-
-find_package(EDT)
-macro_log_feature(EDT_FOUND "EDT" "Required to build EDT PDV source element" "http://www.edt.com/" FALSE)
-
-find_package(Euresys)
-macro_log_feature(EURESYS_FOUND "Euresys" "Required to build Euresys source element" "http://www.euresys.com/" FALSE)
-
-find_package(GigESim)
-macro_log_feature(GIGESIM_FOUND "GigESim" "Required to build A&B Soft GigESim sink element" "http://www.ab-soft.com/" FALSE)
-
 find_package(IDSuEye)
 macro_log_feature(IDSUEYE_FOUND "IDS uEye" "Required to build IDS uEye source element" "http://en.ids-imaging.com/" FALSE)
-
-find_package(Imperx)
-macro_log_feature(IMPERX_FLEX_FOUND "Imperx FrameLink Express" "Required to build Imperx FrameLink Express source element" "http://www.imperx.com/" FALSE)
-
-find_package(ImperxSDI)
-macro_log_feature(IMPERX_SDI_FOUND "Imperx HD-SDI Express" "Required to build Imperx HD-SDI Express source element" "http://www.imperx.com/" FALSE)
-
-find_package(IOtechDaqX)
-macro_log_feature(IOTECHDAQX_FOUND "IOtech DaqX" "Required to build IOtech DaqX source element" "http://www.mccdaq.com/" FALSE)
-
-find_package(KAYA)
-macro_log_feature(KAYA_FOUND "KAYA Vision Point" "Required to build KAYA source element" "http://www.kayainstruments.com/" FALSE)
-
-find_package(Matrox)
-macro_log_feature(MATROX_FOUND "Matrox MIL" "Required to build Matrox MIL source element" "http://www.matrox.com/imaging/" FALSE)
-
-find_package(Phoenix)
-macro_log_feature(PHOENIX_FOUND "Active Silicon Phoenix" "Required to build Active Silicon Phoenix source element" "http://www.activesilicon.com/" FALSE)
-
-find_package(Pleora)
-macro_log_feature(Pleora_FOUND "Pleora eBUS" "Required to build Pleora eBUS source element" "http://www.pleora.com/" FALSE)
-
-find_package(Pylon)
-macro_log_feature(PYLON_FOUND "Basler Pylon" "Required to build Basler Pylon source element" "http://www.baslerweb.com/" FALSE)
-
-find_package(QCam)
-macro_log_feature(QCAM_FOUND "QImaging QCam" "Required to build QImaging QCam source element" "https://www.photometrics.com/qimaging" FALSE)
-
-find_package(Sapera)
-macro_log_feature(SAPERA_FOUND "Teledyne DALSA Sapera" "Required to build Teledyne DALSA Sapera source element" "http://www.teledynedalsa.com/" FALSE)
-
-find_package(XCLIB)
-macro_log_feature(XCLIB_FOUND "EPIX PIXCI" "Required to build EPIX PIXCI source element" "http://www.epixinc.com/" FALSE)
 
 if (WIN32)
   # Windows distributions of GStreamer include ZLIB
