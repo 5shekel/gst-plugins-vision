@@ -78,6 +78,27 @@ enum
 #define gst_intervalometer_parent_class parent_class
 G_DEFINE_TYPE (GstIntervalometer, gst_intervalometer, GST_TYPE_BASE_TRANSFORM);
 
+/* Define the enum type for ramp rate */
+#define GST_TYPE_INTERVALOMETER_RAMP_RATE (gst_intervalometer_ramp_rate_get_type ())
+static GType
+gst_intervalometer_ramp_rate_get_type (void)
+{
+  static GType ramp_rate_type = 0;
+  static const GEnumValue ramp_rate_values[] = {
+    {RAMP_RATE_VSLOW, "Very Slow", "vslow"},
+    {RAMP_RATE_SLOW, "Slow", "slow"},
+    {RAMP_RATE_MEDIUM, "Medium", "medium"},
+    {RAMP_RATE_FAST, "Fast", "fast"},
+    {RAMP_RATE_VFAST, "Very Fast", "vfast"},
+    {0, NULL, NULL}
+  };
+
+  if (!ramp_rate_type) {
+    ramp_rate_type = g_enum_register_static ("GstIntervalometerRampRate", ramp_rate_values);
+  }
+  return ramp_rate_type;
+}
+
 static GstStaticPadTemplate gst_intervalometer_sink_template =
 GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
@@ -186,7 +207,7 @@ gst_intervalometer_class_init (GstIntervalometerClass * klass)
 
   g_object_class_install_property (gobject_class, PROP_RAMP_RATE,
       g_param_spec_enum ("ramp-rate", "Ramp Rate",
-          "Speed of exposure/gain ramping", GST_TYPE_INTERVALOMETER,
+          "Speed of exposure/gain ramping", GST_TYPE_INTERVALOMETER_RAMP_RATE,
           DEFAULT_PROP_RAMP_RATE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
