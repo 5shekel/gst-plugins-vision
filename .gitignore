@@ -25,6 +25,6 @@ ipch/
 *.avi
 gst_plugs/
 results/
-
+*.csv
 # ueye samples
 sys/idsueye/Source/*
