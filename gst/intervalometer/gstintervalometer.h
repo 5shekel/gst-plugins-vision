@@ -74,6 +74,7 @@ struct _GstIntervalometer
   gchar *log_file;               /* CSV log file path */
   gchar *camera_element_name;    /* Name of upstream idsueyesrc element */
   guint update_interval;         /* Update interval in milliseconds */
+  gdouble brightness_smoothing;  /* Brightness smoothing factor (0-1, 0=no smoothing) */
 
   /* Internal state */
   GstElement *camera_src;        /* Reference to upstream camera element */
@@ -93,6 +94,10 @@ struct _GstIntervalometer
   /* Video info */
   GstVideoInfo video_info;
   gboolean video_info_valid;
+  
+  /* Brightness smoothing */
+  gdouble smoothed_brightness;   /* Exponentially smoothed brightness value */
+  gboolean brightness_initialized; /* Whether smoothed_brightness has been initialized */
   
   /* Ramping parameters */
   gdouble ramp_step;             /* Current ramping step size */

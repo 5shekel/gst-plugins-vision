@@ -61,7 +61,8 @@ enum
   PROP_RAMP_RATE,
   PROP_LOG_FILE,
   PROP_CAMERA_ELEMENT,
-  PROP_UPDATE_INTERVAL
+  PROP_UPDATE_INTERVAL,
+  PROP_BRIGHTNESS_SMOOTHING
 };
 
 #define DEFAULT_PROP_ENABLED TRUE
@@ -75,6 +76,7 @@ enum
 #define DEFAULT_PROP_LOG_FILE ""
 #define DEFAULT_PROP_CAMERA_ELEMENT ""
 #define DEFAULT_PROP_UPDATE_INTERVAL 100  /* Update every 100ms (10 Hz) */
+#define DEFAULT_PROP_BRIGHTNESS_SMOOTHING 0.1  /* 10% new, 90% history - heavy smoothing for time-lapse */
 
 /* GStreamer boilerplate */
 #define gst_intervalometer_parent_class parent_class
@@ -232,6 +234,14 @@ gst_intervalometer_class_init (GstIntervalometerClass * klass)
           0, 10000, DEFAULT_PROP_UPDATE_INTERVAL,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_BRIGHTNESS_SMOOTHING,
+      g_param_spec_double ("brightness-smoothing", "Brightness Smoothing",
+          "Exponential smoothing factor for brightness (0=no smoothing, 1=no history). "
+          "Lower values (0.05-0.2) filter out transient objects like people/cars. "
+          "Recommended: 0.1 for dawn/dusk time-lapse",
+          0.0, 1.0, DEFAULT_PROP_BRIGHTNESS_SMOOTHING,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   /* Set element metadata */
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_intervalometer_sink_template));
@@ -267,6 +277,7 @@ gst_intervalometer_init (GstIntervalometer * filter)
   filter->log_file = g_strdup (DEFAULT_PROP_LOG_FILE);
   filter->camera_element_name = g_strdup (DEFAULT_PROP_CAMERA_ELEMENT);
   filter->update_interval = DEFAULT_PROP_UPDATE_INTERVAL;
+  filter->brightness_smoothing = DEFAULT_PROP_BRIGHTNESS_SMOOTHING;
 
   /* Initialize internal state */
   filter->camera_src = NULL;
@@ -282,6 +293,8 @@ gst_intervalometer_init (GstIntervalometer * filter)
   filter->log_header_written = FALSE;
   filter->video_info_valid = FALSE;
   filter->ramp_step = 1.0;
+  filter->smoothed_brightness = DEFAULT_PROP_TARGET_BRIGHTNESS;
+  filter->brightness_initialized = FALSE;
 
   /* Set in-place transform */
   gst_base_transform_set_in_place (GST_BASE_TRANSFORM (filter), TRUE);
@@ -334,6 +347,9 @@ gst_intervalometer_set_property (GObject * object, guint prop_id,
     case PROP_UPDATE_INTERVAL:
       filter->update_interval = g_value_get_uint (value);
       break;
+    case PROP_BRIGHTNESS_SMOOTHING:
+      filter->brightness_smoothing = g_value_get_double (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -379,6 +395,9 @@ gst_intervalometer_get_property (GObject * object, guint prop_id,
       break;
     case PROP_UPDATE_INTERVAL:
       g_value_set_uint (value, filter->update_interval);
+      break;
+    case PROP_BRIGHTNESS_SMOOTHING:
+      g_value_set_double (value, filter->brightness_smoothing);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -532,9 +551,21 @@ gst_intervalometer_transform_ip (GstBaseTransform * trans, GstBuffer * buf)
   /* Always calculate brightness for logging */
   brightness = gst_intervalometer_calculate_brightness (filter, buf);
 
+  /* Apply exponential moving average for brightness smoothing */
+  if (!filter->brightness_initialized) {
+    /* Initialize smoothed brightness on first frame */
+    filter->smoothed_brightness = brightness;
+    filter->brightness_initialized = TRUE;
+  } else {
+    /* Exponential moving average: new_value = alpha * current + (1-alpha) * old */
+    filter->smoothed_brightness = (filter->brightness_smoothing * brightness) +
+        ((1.0 - filter->brightness_smoothing) * filter->smoothed_brightness);
+  }
+
   /* Only update camera settings at the specified interval */
   if (should_update) {
-    gst_intervalometer_update_camera_settings (filter, brightness);
+    /* Use smoothed brightness to filter out transient object movements */
+    gst_intervalometer_update_camera_settings (filter, filter->smoothed_brightness);
     filter->last_update_time = now;
   }
 

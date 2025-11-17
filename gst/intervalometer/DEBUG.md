@@ -352,7 +352,107 @@ Frame 199: 0.282ms  brightness 117
    - Proper min/max values queried from camera hardware
    - All values stay within valid range [0.019 - 19.943] ms
 
-The intervalometer auto-exposure system is now fully functional and flicker-free!
+The intervalometer auto-exposure system is now fully functional!
+
+---
+
+## 🔧 Remaining Issue: Oscillation from Moving Objects
+
+### Problem Description
+
+Even with `vslow` ramp rate and 1000ms updates, small oscillations occur when:
+- Objects move through the scene (people, cars, birds)
+- Temporarily changing the average brightness
+- Algorithm reacts to transient changes, not background light
+
+**Example:**
+```
+Frame 100: brightness 128 → exposure 0.500ms
+Frame 150: person walks by → brightness 140 → exposure starts increasing
+Frame 200: person gone → brightness 128 → exposure starts decreasing
+```
+
+This creates a "breathing" effect as the algorithm chases temporary brightness changes.
+
+### Root Cause: No Temporal Filtering
+
+Currently, the algorithm:
+1. ✅ Calculates brightness every frame
+2. ❌ Uses that single frame's brightness directly for exposure decisions
+3. ❌ Reacts to transient objects instead of background lighting trend
+
+### Solution: Decouple Sampling from Adjustment
+
+**YASS approach** (which we should adopt):
+- **Sample brightness:** Every frame (high temporal resolution)
+- **Smooth brightness:** Exponential moving average or rolling average
+- **Adjust exposure:** Only based on the smoothed brightness value
+
+This filters out transient changes while staying responsive to actual lighting changes.
+
+### Proposed Implementation
+
+Add brightness smoothing with exponential moving average (EMA):
+
+```c
+/* In GstIntervalometer struct, add: */
+gdouble smoothed_brightness;     /* Exponentially smoothed brightness */
+gdouble brightness_alpha;        /* Smoothing factor (0-1) */
+
+/* In transform_ip, replace direct brightness use: */
+// Current (reacts to every frame):
+gst_intervalometer_update_camera_settings(filter, brightness);
+
+// Improved (reacts to trend):
+filter->smoothed_brightness = (brightness_alpha * brightness) +
+                              ((1.0 - brightness_alpha) * filter->smoothed_brightness);
+gst_intervalometer_update_camera_settings(filter, filter->smoothed_brightness);
+```
+
+**Parameters:**
+- `brightness_alpha = 0.1` → heavily smoothed (recommended for time-lapse)
+- `brightness_alpha = 0.3` → moderately smoothed
+- `brightness_alpha = 0.5` → lightly smoothed
+- `brightness_alpha = 1.0` → no smoothing (current behavior)
+
+With alpha=0.1:
+- New frame contributes 10%
+- History contributes 90%
+- Effectively ~10 frame averaging
+- Transient objects have minimal impact
+
+### Alternative: Configurable Brightness Averaging Window
+
+Add a new property `brightness-window` (number of frames to average):
+
+```c
+/* Rolling average over N frames */
+guint brightness_window;           /* e.g., 50 frames = 1 second at 50fps */
+gdouble brightness_history[256];   /* Circular buffer */
+guint brightness_index;            /* Current position in buffer */
+```
+
+This gives users direct control: "average brightness over last N frames"
+
+### Recommendation
+
+**For dawn/dusk time-lapse with moving objects:**
+```bash
+intervalometer enabled=true camera-element=cam \
+    ramp-rate=vslow \
+    update-interval=1000 \
+    brightness-alpha=0.1    # (new parameter - to be implemented)
+```
+
+Or once averaging is implemented:
+```bash
+intervalometer enabled=true camera-element=cam \
+    ramp-rate=vslow \
+    update-interval=1000 \
+    brightness-window=50    # Average over 50 frames (1 sec at 50fps)
+```
+
+This will make the algorithm **ignore transient brightness spikes** from moving objects and focus on the **actual background lighting trend**.
 
 ---
 
