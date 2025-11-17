@@ -270,6 +270,7 @@ gst_intervalometer_init (GstIntervalometer * filter)
 
   /* Initialize internal state */
   filter->camera_src = NULL;
+  filter->hCam = 0;
   filter->current_exposure = DEFAULT_PROP_EXPOSURE_MIN;
   filter->current_gain = DEFAULT_PROP_GAIN_MIN;
   filter->target_exposure = DEFAULT_PROP_EXPOSURE_MIN;
@@ -441,12 +442,7 @@ gst_intervalometer_start (GstBaseTransform * trans)
       GST_WARNING_OBJECT (filter, "Could not find camera element: %s",
           filter->camera_element_name);
     } else {
-      /* Query camera capabilities and current settings */
-      if (gst_intervalometer_query_camera_capabilities (filter)) {
-        GST_INFO_OBJECT (filter, "Successfully queried camera capabilities");
-      } else {
-        GST_WARNING_OBJECT (filter, "Failed to query camera capabilities");
-      }
+      GST_INFO_OBJECT (filter, "Found camera element, will query capabilities when camera is ready");
     }
   }
 
@@ -505,6 +501,14 @@ gst_intervalometer_transform_ip (GstBaseTransform * trans, GstBuffer * buf)
     return GST_FLOW_OK;
   }
 
+  /* Query camera capabilities on first frame if not done yet */
+  if (filter->camera_src && !filter->hCam && filter->exposure_min == 0.0) {
+    if (gst_intervalometer_query_camera_capabilities (filter)) {
+      GST_INFO_OBJECT (filter, "Successfully queried camera capabilities on first frame");
+      gst_intervalometer_reset (filter);  /* Re-read current settings with proper handle */
+    }
+  }
+
   /* Get current time */
   now = gst_clock_get_time (gst_system_clock_obtain ());
 
@@ -547,16 +551,28 @@ gst_intervalometer_transform_ip (GstBaseTransform * trans, GstBuffer * buf)
 static void
 gst_intervalometer_reset (GstIntervalometer * filter)
 {
-  /* Query current camera settings if available */
-  if (filter->camera_src) {
-    g_object_get (filter->camera_src,
-        "exposure", &filter->current_exposure,
-        "gain", &filter->current_gain,
-        NULL);
-    filter->target_exposure = filter->current_exposure;
+  /* Query current camera settings using IDS uEye SDK */
+  if (filter->camera_src && filter->hCam) {
+    /* Get current exposure using IDS SDK */
+    double current_exp = 0.0;
+    INT ret = is_Exposure (filter->hCam, IS_EXPOSURE_CMD_GET_EXPOSURE,
+        &current_exp, sizeof(double));
+    if (ret == IS_SUCCESS) {
+      filter->current_exposure = current_exp;
+      filter->target_exposure = current_exp;
+      GST_INFO_OBJECT (filter, "Queried current exposure from camera: %.3f ms",
+          current_exp);
+    } else {
+      GST_WARNING_OBJECT (filter, "Failed to query exposure from camera (error %d), using min",
+          ret);
+      filter->current_exposure = filter->exposure_min;
+      filter->target_exposure = filter->exposure_min;
+    }
+
+    /* Get current gain using GObject (gain doesn't have SDK query function) */
+    g_object_get (filter->camera_src, "gain", &filter->current_gain, NULL);
     filter->target_gain = filter->current_gain;
-    GST_INFO_OBJECT (filter, "Queried current settings: exposure=%.3f ms, gain=%d",
-        filter->current_exposure, filter->current_gain);
+    GST_INFO_OBJECT (filter, "Queried current gain: %d", filter->current_gain);
   } else {
     /* Fallback to min values if camera not available */
     filter->current_exposure = filter->exposure_min;
@@ -685,17 +701,35 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
     }
   }
 
-  /* Smooth ramping towards target */
-  if (fabs (filter->current_exposure - filter->target_exposure) > 0.001) {
-    filter->current_exposure = filter->target_exposure;
+  /* Apply smooth ramping using ramp_step */
+  gdouble exp_delta = filter->target_exposure - filter->current_exposure;
+  gdouble gain_delta = filter->target_gain - filter->current_gain;
+
+  /* Calculate ramp step based on ramp rate (percentage of delta per update) */
+  filter->ramp_step = 0.1 * ramp_multiplier; /* 10% base rate, scaled by ramp setting */
+
+  /* Ramp exposure smoothly towards target */
+  if (fabs (exp_delta) > 0.001) {
+    gdouble old_exposure = filter->current_exposure;
+    filter->current_exposure += exp_delta * filter->ramp_step;
     g_object_set (filter->camera_src, "exposure", filter->current_exposure, NULL);
-    GST_DEBUG_OBJECT (filter, "Set exposure to %.3f ms", filter->current_exposure);
+    GST_DEBUG_OBJECT (filter, "Ramping exposure: %.3f -> %.3f (target %.3f, step %.1f%%)",
+        old_exposure, filter->current_exposure, filter->target_exposure,
+        filter->ramp_step * 100);
   }
 
-  if (filter->current_gain != filter->target_gain) {
-    filter->current_gain = filter->target_gain;
+  /* Ramp gain smoothly towards target */
+  if (gain_delta != 0) {
+    gdouble gain_step = gain_delta * filter->ramp_step;
+    /* Ensure minimum step of 1 for gain (integer values) */
+    if (fabs (gain_step) < 1.0) {
+      gain_step = (gain_delta > 0) ? 1.0 : -1.0;
+    }
+    gint old_gain = filter->current_gain;
+    filter->current_gain += (gint) gain_step;
     g_object_set (filter->camera_src, "gain", filter->current_gain, NULL);
-    GST_DEBUG_OBJECT (filter, "Set gain to %d", filter->current_gain);
+    GST_DEBUG_OBJECT (filter, "Ramping gain: %d -> %d (target %d)",
+        old_gain, filter->current_gain, filter->target_gain);
   }
 }
 
@@ -764,37 +798,50 @@ gst_intervalometer_find_camera_element (GstIntervalometer * filter)
 static gboolean
 gst_intervalometer_query_camera_capabilities (GstIntervalometer * filter)
 {
-  GParamSpec *pspec;
-  GObjectClass *cam_class;
-  
   if (!filter->camera_src) {
     GST_WARNING_OBJECT (filter, "No camera element to query");
     return FALSE;
   }
 
-  cam_class = G_OBJECT_GET_CLASS (filter->camera_src);
+  /* Get the IDS uEye camera handle from idsueyesrc element */
+  gpointer hcam_ptr = NULL;
+  g_object_get (filter->camera_src, "hcam", &hcam_ptr, NULL);
+  if (!hcam_ptr) {
+    GST_WARNING_OBJECT (filter, "Failed to get camera handle from idsueyesrc");
+    return FALSE;
+  }
+  
+  /* Convert pointer back to HIDS (DWORD) */
+  filter->hCam = (HIDS)(uintptr_t)hcam_ptr;
+  GST_INFO_OBJECT (filter, "Got IDS uEye camera handle: 0x%x", filter->hCam);
 
-  /* Query exposure limits if not manually set */
+  /* Query exposure limits using IDS uEye SDK if not manually set */
   if (filter->exposure_min == 0.0 || filter->exposure_max == 0.0) {
-    pspec = g_object_class_find_property (cam_class, "exposure");
-    if (pspec && G_IS_PARAM_SPEC_DOUBLE (pspec)) {
-      GParamSpecDouble *double_spec = G_PARAM_SPEC_DOUBLE (pspec);
+    double exposure_range[3];  /* [min, max, increment] */
+    INT ret = is_Exposure (filter->hCam, IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE,
+        exposure_range, sizeof(exposure_range));
+    
+    if (ret == IS_SUCCESS) {
       if (filter->exposure_min == 0.0) {
-        filter->exposure_min = double_spec->minimum;
+        filter->exposure_min = exposure_range[0];
         GST_INFO_OBJECT (filter, "Queried exposure_min: %.3f ms", filter->exposure_min);
       }
       if (filter->exposure_max == 0.0) {
-        filter->exposure_max = double_spec->maximum;
+        filter->exposure_max = exposure_range[1];
         GST_INFO_OBJECT (filter, "Queried exposure_max: %.3f ms", filter->exposure_max);
       }
+      GST_INFO_OBJECT (filter, "Exposure range increment: %.3f ms", exposure_range[2]);
     } else {
-      GST_WARNING_OBJECT (filter, "Could not query exposure limits from camera");
+      GST_WARNING_OBJECT (filter, "Failed to query exposure range from IDS SDK (error %d)", ret);
       return FALSE;
     }
   }
 
-  /* Query gain limits if not manually set */
+  /* Query gain limits from GObject properties (IDS SDK doesn't have dedicated gain range query) */
   if (filter->gain_min == 0 || filter->gain_max == 0) {
+    GParamSpec *pspec;
+    GObjectClass *cam_class = G_OBJECT_GET_CLASS (filter->camera_src);
+    
     pspec = g_object_class_find_property (cam_class, "gain");
     if (pspec && G_IS_PARAM_SPEC_INT (pspec)) {
       GParamSpecInt *int_spec = G_PARAM_SPEC_INT (pspec);

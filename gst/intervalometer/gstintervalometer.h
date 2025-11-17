@@ -24,6 +24,9 @@
 #include <gst/base/gstbasetransform.h>
 #include <gst/video/video.h>
 
+#define _PURE_C
+#include "../../sys/idsueye/include/ueye.h"
+
 G_BEGIN_DECLS
 
 #define GST_TYPE_INTERVALOMETER \
@@ -74,6 +77,7 @@ struct _GstIntervalometer
 
   /* Internal state */
   GstElement *camera_src;        /* Reference to upstream camera element */
+  HIDS hCam;                     /* IDS uEye camera handle from idsueyesrc */
   gdouble current_exposure;      /* Current exposure setting */
   gint current_gain;             /* Current gain setting */
   gdouble target_exposure;       /* Target exposure for ramping */

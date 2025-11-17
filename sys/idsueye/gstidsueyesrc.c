@@ -77,7 +77,8 @@ enum
   PROP_GAIN,
   PROP_AUTO_EXPOSURE,
   PROP_AUTO_GAIN,
-  PROP_GAIN_BOOST
+  PROP_GAIN_BOOST,
+  PROP_HCAM
 };
 
 #define DEFAULT_PROP_CAMERA_ID 0
@@ -187,6 +188,10 @@ gst_idsueyesrc_class_init (GstIdsueyeSrcClass * klass)
       g_param_spec_boolean ("gain-boost", "Gain Boost",
           "Enable hardware gain boost", DEFAULT_PROP_GAIN_BOOST,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+  g_object_class_install_property (gobject_class, PROP_HCAM,
+      g_param_spec_pointer ("hcam", "Camera Handle",
+          "IDS uEye camera handle (HIDS) - read-only, available after start",
+          (GParamFlags) (G_PARAM_READABLE | G_PARAM_STATIC_STRINGS)));
 }
 
 static void
@@ -425,6 +430,10 @@ gst_idsueyesrc_get_property (GObject * object, guint property_id,
       } else {
         g_value_set_boolean (value, src->gain_boost);
       }
+      break;
+    case PROP_HCAM:
+      /* Return the camera handle as a pointer */
+      g_value_set_pointer (value, (gpointer)(uintptr_t)src->hCam);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
