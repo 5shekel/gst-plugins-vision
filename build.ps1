@@ -99,9 +99,10 @@ if ($BuildType -eq 'IDSuEyeOnly') {
     $pluginPaths = @(
         @{ Name = "libgstidsueye.dll"; RelPath = "sys\idsueye\Release\libgstidsueye.dll" },
         @{ Name = "libgstrollingsum.dll"; RelPath = "gst\rollingsum\Release\libgstrollingsum.dll" },
-        @{ Name = "libgstintervalometer.dll"; RelPath = "gst\intervalometer\Release\libgstintervalometer.dll" }
+        @{ Name = "libgstintervalometer.dll"; RelPath = "gst\intervalometer\Release\libgstintervalometer.dll" },
+        @{ Name = "libgstlinescan.dll"; RelPath = "gst\linescan\Release\libgstlinescan.dll" }
     )
-    Write-Host "Building: All plugins (IDS uEye, Rolling Sum, Intervalometer)" -ForegroundColor Yellow
+    Write-Host "Building: All plugins (IDS uEye, Rolling Sum, Intervalometer, Linescan)" -ForegroundColor Yellow
 }
 
 Write-Host ""
@@ -294,6 +295,7 @@ try {
         Write-Host "  gst-inspect-1.0 idsueyesrc" -ForegroundColor White
         Write-Host "  gst-inspect-1.0 rollingsum" -ForegroundColor White
         Write-Host "  gst-inspect-1.0 intervalometer" -ForegroundColor White
+        Write-Host "  gst-inspect-1.0 linescan" -ForegroundColor White
         Write-Host ""
         Write-Host "Example pipelines:" -ForegroundColor Yellow
         Write-Host "  # Rolling sum detection:" -ForegroundColor Gray
@@ -301,6 +303,9 @@ try {
         Write-Host ""
         Write-Host "  # Auto-exposure time-lapse:" -ForegroundColor Gray
         Write-Host "  gst-launch-1.0 idsueyesrc name=cam ! intervalometer enabled=true camera-element=cam exposure-min=0.85 exposure-max=1.24 gain-min=0 gain-max=52 ! autovideosink" -ForegroundColor White
+        Write-Host ""
+        Write-Host "  # Line scan camera (horizontal):" -ForegroundColor Gray
+        Write-Host "  gst-launch-1.0 idsueyesrc ! linescan direction=horizontal line-index=100 output-size=800 ! videoconvert ! autovideosink" -ForegroundColor White
     }
     Write-Host ""
 

@@ -5,6 +5,7 @@ endif (OPENCV_FOUND)
 add_subdirectory (bayerutils)
 add_subdirectory (extractcolor)
 add_subdirectory (intervalometer)
+add_subdirectory (linescan)
 
 if (ENABLE_KLV)
   add_subdirectory (klv)

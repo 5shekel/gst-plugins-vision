@@ -27,12 +27,12 @@ gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.in
 #### Send Single Line via UDP
 Extract and transmit one line from camera (daytime, 200fps):
 ```pwsh
-gst-launch-1.0 idsueyesrc config-file=ini/100fps-10exp-2456x4pix-500top-cw-extragain.ini exposure=10 framerate=750 ! `
+gst-launch-1.0 idsueyesrc config-file=ini/2456x4pix-500top-cw-extragain.ini exposure=10 framerate=750 ! `
 videocrop bottom=3 ! `
 queue ! `
 udpsink host=10.81.2.183 port=5000
 ```
-now moving to 
+now moving to automatic exposure (see [gstintervalometer](gst\intervalometer\gstintervalometer.c))
 ```pwsh
 uv run .\scripts\launch-ids.py `
     --config .\ini\2456x4pix-500top-cw.ini `
@@ -42,6 +42,16 @@ uv run .\scripts\launch-ids.py `
     --gain-boost `
     --exposure 10 `
     --host 10.81.2.183 
+```
+
+```pwsh
+ gst-launch-1.0 idsueyesrc config-file=ini/2456x4pix-500top-cw-extragain.ini exposure=0.85 framerate=750 gain=0 name=cam device-id=1 ! `
+    intervalometer enabled=true camera-element=cam `
+        ramp-rate=vslow `
+        update-interval=1000 `
+        gain-ma52 `
+        log-file=timelapse.csv ! `
+        videocrop bottom=3 ! queue ! udpsink host=10.81.2.183 port=5000
 ```
 
 #### Receive and Display
@@ -77,7 +87,7 @@ gst-launch-1.0 -v `
 ```
 moving to 
 ```pwsh
-uv run .\scripts\launch-ids.py --config .\ini\100fps-10exp-2456x4pix-500top-cw-extragain.ini --device-id 1 --framerate 750 --exposure 10 --host 10.81.2.183 --gain 52 
+uv run .\scripts\launch-ids.py --config .\ini\2456x4pix-500top-cw-extragain.ini --device-id 1 --framerate 750 --exposure 10 --host 10.81.2.183 --gain 52 
 ```
 
 ## WIP - Frame filtering based on column analysis
