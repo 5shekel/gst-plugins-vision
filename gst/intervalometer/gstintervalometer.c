@@ -60,19 +60,21 @@ enum
   PROP_GAIN_MAX,
   PROP_RAMP_RATE,
   PROP_LOG_FILE,
-  PROP_CAMERA_ELEMENT
+  PROP_CAMERA_ELEMENT,
+  PROP_UPDATE_INTERVAL
 };
 
 #define DEFAULT_PROP_ENABLED TRUE
 #define DEFAULT_PROP_TARGET_BRIGHTNESS 128.0
 #define DEFAULT_PROP_COMPENSATION 0.0
-#define DEFAULT_PROP_EXPOSURE_MIN 0.85
-#define DEFAULT_PROP_EXPOSURE_MAX 1.24
-#define DEFAULT_PROP_GAIN_MIN 0
-#define DEFAULT_PROP_GAIN_MAX 52
+#define DEFAULT_PROP_EXPOSURE_MIN 0.0  /* Will be queried from camera */
+#define DEFAULT_PROP_EXPOSURE_MAX 0.0  /* Will be queried from camera */
+#define DEFAULT_PROP_GAIN_MIN 0        /* Will be queried from camera */
+#define DEFAULT_PROP_GAIN_MAX 0        /* Will be queried from camera */
 #define DEFAULT_PROP_RAMP_RATE RAMP_RATE_MEDIUM
 #define DEFAULT_PROP_LOG_FILE ""
 #define DEFAULT_PROP_CAMERA_ELEMENT ""
+#define DEFAULT_PROP_UPDATE_INTERVAL 100  /* Update every 100ms (10 Hz) */
 
 /* GStreamer boilerplate */
 #define gst_intervalometer_parent_class parent_class
@@ -138,6 +140,7 @@ static void gst_intervalometer_update_camera_settings (GstIntervalometer * filte
 static void gst_intervalometer_write_log (GstIntervalometer * filter,
     gdouble brightness);
 static GstElement * gst_intervalometer_find_camera_element (GstIntervalometer * filter);
+static gboolean gst_intervalometer_query_camera_capabilities (GstIntervalometer * filter);
 
 /* Ramp rate multipliers (based on YASS algorithm) */
 static const gdouble ramp_rate_multipliers[] = {
@@ -185,24 +188,24 @@ gst_intervalometer_class_init (GstIntervalometerClass * klass)
 
   g_object_class_install_property (gobject_class, PROP_EXPOSURE_MIN,
       g_param_spec_double ("exposure-min", "Minimum Exposure",
-          "Minimum exposure time in milliseconds", 0.01, 1000.0,
+          "Minimum exposure time in milliseconds (0=query from camera)", 0.0, 10000.0,
           DEFAULT_PROP_EXPOSURE_MIN,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_EXPOSURE_MAX,
       g_param_spec_double ("exposure-max", "Maximum Exposure",
-          "Maximum exposure time in milliseconds", 0.01, 1000.0,
+          "Maximum exposure time in milliseconds (0=query from camera)", 0.0, 10000.0,
           DEFAULT_PROP_EXPOSURE_MAX,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_GAIN_MIN,
       g_param_spec_int ("gain-min", "Minimum Gain",
-          "Minimum gain value", 0, 100, DEFAULT_PROP_GAIN_MIN,
+          "Minimum gain value (0=query from camera)", 0, 1000, DEFAULT_PROP_GAIN_MIN,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_GAIN_MAX,
       g_param_spec_int ("gain-max", "Maximum Gain",
-          "Maximum gain value", 0, 100, DEFAULT_PROP_GAIN_MAX,
+          "Maximum gain value (0=query from camera)", 0, 1000, DEFAULT_PROP_GAIN_MAX,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_RAMP_RATE,
@@ -221,6 +224,12 @@ gst_intervalometer_class_init (GstIntervalometerClass * klass)
       g_param_spec_string ("camera-element", "Camera Element Name",
           "Name of the upstream camera element to control",
           DEFAULT_PROP_CAMERA_ELEMENT,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_UPDATE_INTERVAL,
+      g_param_spec_uint ("update-interval", "Update Interval",
+          "Interval between algorithm updates in milliseconds (0=every frame)",
+          0, 10000, DEFAULT_PROP_UPDATE_INTERVAL,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   /* Set element metadata */
@@ -257,6 +266,7 @@ gst_intervalometer_init (GstIntervalometer * filter)
   filter->ramp_rate = DEFAULT_PROP_RAMP_RATE;
   filter->log_file = g_strdup (DEFAULT_PROP_LOG_FILE);
   filter->camera_element_name = g_strdup (DEFAULT_PROP_CAMERA_ELEMENT);
+  filter->update_interval = DEFAULT_PROP_UPDATE_INTERVAL;
 
   /* Initialize internal state */
   filter->camera_src = NULL;
@@ -266,6 +276,7 @@ gst_intervalometer_init (GstIntervalometer * filter)
   filter->target_gain = DEFAULT_PROP_GAIN_MIN;
   filter->frame_count = 0;
   filter->start_time = GST_CLOCK_TIME_NONE;
+  filter->last_update_time = GST_CLOCK_TIME_NONE;
   filter->log_fp = NULL;
   filter->log_header_written = FALSE;
   filter->video_info_valid = FALSE;
@@ -319,6 +330,9 @@ gst_intervalometer_set_property (GObject * object, guint prop_id,
         filter->camera_src = gst_intervalometer_find_camera_element (filter);
       }
       break;
+    case PROP_UPDATE_INTERVAL:
+      filter->update_interval = g_value_get_uint (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -361,6 +375,9 @@ gst_intervalometer_get_property (GObject * object, guint prop_id,
       break;
     case PROP_CAMERA_ELEMENT:
       g_value_set_string (value, filter->camera_element_name);
+      break;
+    case PROP_UPDATE_INTERVAL:
+      g_value_set_uint (value, filter->update_interval);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -423,6 +440,13 @@ gst_intervalometer_start (GstBaseTransform * trans)
     if (!filter->camera_src) {
       GST_WARNING_OBJECT (filter, "Could not find camera element: %s",
           filter->camera_element_name);
+    } else {
+      /* Query camera capabilities and current settings */
+      if (gst_intervalometer_query_camera_capabilities (filter)) {
+        GST_INFO_OBJECT (filter, "Successfully queried camera capabilities");
+      } else {
+        GST_WARNING_OBJECT (filter, "Failed to query camera capabilities");
+      }
     }
   }
 
@@ -474,16 +498,41 @@ gst_intervalometer_transform_ip (GstBaseTransform * trans, GstBuffer * buf)
 {
   GstIntervalometer *filter = GST_INTERVALOMETER (trans);
   gdouble brightness;
+  GstClockTime now;
+  gboolean should_update = FALSE;
 
   if (!filter->enabled || !filter->video_info_valid) {
     return GST_FLOW_OK;
   }
 
-  /* Calculate brightness from current frame */
+  /* Get current time */
+  now = gst_clock_get_time (gst_system_clock_obtain ());
+
+  /* Check if we should update based on interval */
+  if (filter->update_interval == 0) {
+    /* Update every frame */
+    should_update = TRUE;
+  } else if (filter->last_update_time == GST_CLOCK_TIME_NONE) {
+    /* First update */
+    should_update = TRUE;
+  } else {
+    /* Check if enough time has passed */
+    GstClockTime elapsed = GST_CLOCK_DIFF (filter->last_update_time, now);
+    GstClockTime interval_ns = filter->update_interval * GST_MSECOND;
+    
+    if (elapsed >= interval_ns) {
+      should_update = TRUE;
+    }
+  }
+
+  /* Always calculate brightness for logging */
   brightness = gst_intervalometer_calculate_brightness (filter, buf);
 
-  /* Update camera settings based on brightness */
-  gst_intervalometer_update_camera_settings (filter, brightness);
+  /* Only update camera settings at the specified interval */
+  if (should_update) {
+    gst_intervalometer_update_camera_settings (filter, brightness);
+    filter->last_update_time = now;
+  }
 
   /* Write to log file if enabled */
   if (filter->log_fp) {
@@ -498,10 +547,23 @@ gst_intervalometer_transform_ip (GstBaseTransform * trans, GstBuffer * buf)
 static void
 gst_intervalometer_reset (GstIntervalometer * filter)
 {
-  filter->current_exposure = filter->exposure_min;
-  filter->current_gain = filter->gain_min;
-  filter->target_exposure = filter->exposure_min;
-  filter->target_gain = filter->gain_min;
+  /* Query current camera settings if available */
+  if (filter->camera_src) {
+    g_object_get (filter->camera_src,
+        "exposure", &filter->current_exposure,
+        "gain", &filter->current_gain,
+        NULL);
+    filter->target_exposure = filter->current_exposure;
+    filter->target_gain = filter->current_gain;
+    GST_INFO_OBJECT (filter, "Queried current settings: exposure=%.3f ms, gain=%d",
+        filter->current_exposure, filter->current_gain);
+  } else {
+    /* Fallback to min values if camera not available */
+    filter->current_exposure = filter->exposure_min;
+    filter->current_gain = filter->gain_min;
+    filter->target_exposure = filter->exposure_min;
+    filter->target_gain = filter->gain_min;
+  }
   filter->frame_count = 0;
 }
 
@@ -697,6 +759,63 @@ gst_intervalometer_find_camera_element (GstIntervalometer * filter)
   }
 
   return element;
+}
+
+static gboolean
+gst_intervalometer_query_camera_capabilities (GstIntervalometer * filter)
+{
+  GParamSpec *pspec;
+  GObjectClass *cam_class;
+  
+  if (!filter->camera_src) {
+    GST_WARNING_OBJECT (filter, "No camera element to query");
+    return FALSE;
+  }
+
+  cam_class = G_OBJECT_GET_CLASS (filter->camera_src);
+
+  /* Query exposure limits if not manually set */
+  if (filter->exposure_min == 0.0 || filter->exposure_max == 0.0) {
+    pspec = g_object_class_find_property (cam_class, "exposure");
+    if (pspec && G_IS_PARAM_SPEC_DOUBLE (pspec)) {
+      GParamSpecDouble *double_spec = G_PARAM_SPEC_DOUBLE (pspec);
+      if (filter->exposure_min == 0.0) {
+        filter->exposure_min = double_spec->minimum;
+        GST_INFO_OBJECT (filter, "Queried exposure_min: %.3f ms", filter->exposure_min);
+      }
+      if (filter->exposure_max == 0.0) {
+        filter->exposure_max = double_spec->maximum;
+        GST_INFO_OBJECT (filter, "Queried exposure_max: %.3f ms", filter->exposure_max);
+      }
+    } else {
+      GST_WARNING_OBJECT (filter, "Could not query exposure limits from camera");
+      return FALSE;
+    }
+  }
+
+  /* Query gain limits if not manually set */
+  if (filter->gain_min == 0 || filter->gain_max == 0) {
+    pspec = g_object_class_find_property (cam_class, "gain");
+    if (pspec && G_IS_PARAM_SPEC_INT (pspec)) {
+      GParamSpecInt *int_spec = G_PARAM_SPEC_INT (pspec);
+      if (filter->gain_min == 0) {
+        filter->gain_min = int_spec->minimum;
+        GST_INFO_OBJECT (filter, "Queried gain_min: %d", filter->gain_min);
+      }
+      if (filter->gain_max == 0) {
+        filter->gain_max = int_spec->maximum;
+        GST_INFO_OBJECT (filter, "Queried gain_max: %d", filter->gain_max);
+      }
+    } else {
+      GST_WARNING_OBJECT (filter, "Could not query gain limits from camera");
+      return FALSE;
+    }
+  }
+
+  GST_INFO_OBJECT (filter, "Camera capabilities: exposure=[%.3f, %.3f] ms, gain=[%d, %d]",
+      filter->exposure_min, filter->exposure_max, filter->gain_min, filter->gain_max);
+
+  return TRUE;
 }
 
 static gboolean

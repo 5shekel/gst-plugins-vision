@@ -70,6 +70,7 @@ struct _GstIntervalometer
   GstIntervalometerRampRate ramp_rate;
   gchar *log_file;               /* CSV log file path */
   gchar *camera_element_name;    /* Name of upstream idsueyesrc element */
+  guint update_interval;         /* Update interval in milliseconds */
 
   /* Internal state */
   GstElement *camera_src;        /* Reference to upstream camera element */
@@ -80,6 +81,7 @@ struct _GstIntervalometer
   
   guint64 frame_count;           /* Number of frames processed */
   GstClockTime start_time;       /* Time when processing started */
+  GstClockTime last_update_time; /* Time of last algorithm update */
   
   FILE *log_fp;                  /* Log file handle */
   gboolean log_header_written;   /* Whether CSV header has been written */
