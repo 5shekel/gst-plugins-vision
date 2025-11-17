@@ -66,6 +66,13 @@ make install
 | Property | Type | Values | Default | Description |
 |----------|------|--------|---------|-------------|
 | `ramp-rate` | enum | VSlow, Slow, Medium, Fast, VFast | Medium | Speed of parameter changes |
+| `update-interval` | int | 10-10000 | 100 | Time between exposure updates (ms) |
+
+### Brightness Filtering
+
+| Property | Type | Range | Default | Description |
+|----------|------|-------|---------|-------------|
+| `brightness-smoothing` | double | 0.0-1.0 | 0.1 | Temporal smoothing factor (EMA alpha) |
 
 ### Logging
 
@@ -119,7 +126,28 @@ gst-launch-1.0 idsueyesrc name=cam ! \
   videoconvert ! autovideosink
 ```
 
-### Complete Time-Lapse Pipeline
+### Dawn/Dusk Time-Lapse (Recommended)
+
+Optimized settings for smooth sunrise/sunset time-lapse:
+
+```bash
+gst-launch-1.0 \
+  idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini \
+    exposure=0.85 framerate=50 gain=0 name=cam device-id=2 ! \
+  intervalometer enabled=true camera-element=cam \
+    ramp-rate=vslow \
+    update-interval=1000 \
+    brightness-smoothing=0.1 \
+    log-file=timelapse.csv ! \
+  videocrop bottom=3 ! queue ! videoconvert ! autovideosink
+```
+
+**Key settings:**
+- `ramp-rate=vslow`: 5% exposure steps per update (smooth transitions)
+- `update-interval=1000`: Updates every 1 second (not too aggressive)
+- `brightness-smoothing=0.1`: Filters out moving objects (cars, people, birds)
+
+### Complete Time-Lapse Recording
 
 Record a time-lapse with auto-exposure:
 
@@ -174,33 +202,77 @@ The filter finds and controls the upstream `idsueyesrc` element using the `camer
 
 Ensure your camera source is named and the name matches the `camera-element` property.
 
-## Ramp Rates
+## Configuration Reference
 
-| Rate | Multiplier | Best For |
-|------|------------|----------|
-| VSlow | 0.5x | Very slow light changes, maximum smoothness |
-| Slow | 1.0x | Gradual sunset/sunrise over hours |
-| Medium | 2.0x | Normal time-lapse scenarios |
-| Fast | 4.0x | Faster light changes, clouds passing |
-| VFast | 8.0x | Quick adaptation, testing |
+### Ramp Rates
+
+| Rate | Multiplier | Step Size | Best For |
+|------|------------|-----------|----------|
+| VSlow | 0.5x | 5% per update | Dawn/dusk time-lapse (recommended) |
+| Slow | 1.0x | 10% per update | Gradual sunset/sunrise over hours |
+| Medium | 2.0x | 20% per update | Normal time-lapse scenarios |
+| Fast | 4.0x | 40% per update | Faster light changes, clouds passing |
+| VFast | 8.0x | 80% per update | Quick adaptation, testing |
+
+**Note:** The base ramping rate is 10% of the delta between current and target values, multiplied by the ramp rate setting.
+
+### Update Intervals
+
+| Interval | Updates/sec | Best For |
+|----------|-------------|----------|
+| 100ms | 10 Hz | Fast-changing scenes (clouds, indoor) |
+| 500ms | 2 Hz | Moderate changes |
+| **1000ms** | **1 Hz** | **Dawn/dusk time-lapse (recommended)** |
+| 2000ms | 0.5 Hz | Very slow lighting changes |
+| 5000ms | 0.2 Hz | Extremely slow changes |
+
+**Important:** At high frame rates (50fps), avoid very short update intervals (< 500ms) to prevent oscillation and flickering.
+
+### Brightness Smoothing
+
+The `brightness-smoothing` property uses Exponential Moving Average (EMA) to filter out transient brightness changes from moving objects:
+
+```
+smoothed_brightness = (alpha × current_brightness) + ((1 - alpha) × previous_smoothed)
+```
+
+| Value | Behavior | Best For |
+|-------|----------|----------|
+| 0.05 | Very heavy smoothing | High traffic scenes |
+| **0.1** | **Heavy smoothing (default)** | **Time-lapse with moving objects** |
+| 0.3 | Moderate smoothing | Some filtering needed |
+| 0.5 | Light smoothing | Quick response |
+| 1.0 | No smoothing | Instant response to changes |
+
+**Effect:** With `brightness-smoothing=0.1`, the algorithm effectively averages brightness over ~10 frames, filtering out cars, people, and birds while still tracking slow lighting trends.
 
 ## Tips for Best Results
 
-### Time-Lapse Settings
+### Dawn/Dusk Time-Lapse (Recommended Configuration)
 
 ```
-exposure-min: 0.85 (or camera-specific minimum)
-exposure-max: 1.24 (or 1/framerate to avoid motion blur)
+ramp-rate: vslow (5% steps - very gradual)
+update-interval: 1000 (1 second between updates)
+brightness-smoothing: 0.1 (filter moving objects)
+exposure-min: 0.85 (or camera minimum)
+exposure-max: 1.24 (or 1/framerate)
 gain-min: 0 (cleanest image)
-gain-max: 52 (or camera's limit)
-ramp-rate: slow or medium
-target-brightness: 128-140
+gain-max: 52 (or camera limit)
+target-brightness: 128
 ```
+
+**Why these settings:**
+- `vslow` ramp rate prevents visible exposure jumps
+- 1000ms update interval allows camera hardware to settle
+- Brightness smoothing filters transient changes (cars, people)
+- Results in smooth, flicker-free time-lapse
 
 ### Fast Changing Conditions
 
 ```
 ramp-rate: fast or vfast
+update-interval: 100-500
+brightness-smoothing: 0.3-1.0 (more responsive)
 compensation: Adjust to preference (-1.0 for darker, +1.0 for brighter)
 ```
 
@@ -208,8 +280,17 @@ compensation: Adjust to preference (-1.0 for darker, +1.0 for brighter)
 
 ```
 gain-max: 20-30 (lower max gain = less noise)
-ramp-rate: slow (smoother transitions)
+ramp-rate: slow or vslow (smoother transitions)
+update-interval: 1000-2000
 ```
+
+### Avoiding Flickering
+
+If you experience flickering or oscillation:
+1. **Increase update-interval**: Start with 1000ms
+2. **Decrease ramp-rate**: Use `vslow` or `slow`
+3. **Enable brightness-smoothing**: Set to 0.1 or lower
+4. **Check your settings**: At 50fps, 100ms updates = every 5 frames (too fast!)
 
 ## Troubleshooting
 
@@ -218,9 +299,21 @@ ramp-rate: slow (smoother transitions)
 - Check that camera allows runtime exposure/gain changes
 - Ensure `enabled=true` is set
 
+**Flickering or oscillating exposure:**
+- **Primary cause:** Update interval too fast for your frame rate
+- **Solution:** Increase `update-interval` to 1000ms
+- **Also try:** Set `ramp-rate=vslow` and `brightness-smoothing=0.1`
+- **At 50fps:** Never use update intervals < 500ms
+
 **Changes too fast/slow:**
 - Adjust `ramp-rate` property
+- Modify `update-interval` (higher = slower convergence)
 - Check `exposure-min`/`exposure-max` range is appropriate
+
+**Brightness oscillates with moving objects:**
+- Enable `brightness-smoothing=0.1` to filter transients
+- Lower values (0.05) provide even more smoothing
+- This filters cars, people, birds while tracking lighting trends
 
 **Brightness not reaching target:**
 - Increase `gain-max` to allow more gain
@@ -240,6 +333,31 @@ ramp-rate: slow (smoother transitions)
 | Integration | Standalone Lua script | GStreamer pipeline element |
 | Real-time | Script-based intervals | Frame-by-frame analysis |
 | Logging | CSV to SD card | CSV to filesystem |
+
+## Technical Notes
+
+### Flickering Fix (2025)
+
+The original implementation had a critical bug where exposure ramping was not actually implemented - the code would instantly jump to target values instead of gradually ramping. This caused visible flickering, especially with short update intervals.
+
+**Fixed in [`gstintervalometer.c:688-716`](gst/intervalometer/gstintervalometer.c:688-716):**
+- Implemented proper gradual ramping using the `ramp_step` variable
+- Each update now applies a percentage of the delta (not instant jumps)
+- Formula: `current_exposure += (target_exposure - current_exposure) × ramp_step`
+
+### Exposure Range Query Fix
+
+The original implementation used GObject property specs to query exposure limits, which returned incorrect values (0.0 min, DBL_MAX max). This has been fixed to use the IDS uEye SDK directly:
+
+**Changes made:**
+- Added IDS SDK header include and camera handle support
+- Added `hcam` property to `idsueyesrc` to expose camera handle
+- Use `is_Exposure(IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE)` for proper hardware limits
+- Result: Proper min/max values (e.g., [0.019 - 19.943] ms) from camera
+
+### Brightness Smoothing
+
+Added Exponential Moving Average (EMA) filtering to handle transient brightness changes from moving objects (cars, people, birds). This prevents exposure oscillation while maintaining responsiveness to actual lighting changes.
 
 ## License
 

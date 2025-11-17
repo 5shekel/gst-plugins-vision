@@ -710,9 +710,12 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
   gain_range = filter->gain_max - filter->gain_min;
 
   /* Determine target exposure and gain using YASS-like algorithm */
+  /* Use tolerance for exposure comparisons to avoid asymptotic stalling */
+  #define EXPOSURE_TOLERANCE 0.01  /* 0.01 ms tolerance */
+  
   if (brightness > adjusted_target) {
     /* Too bright - decrease exposure first, then gain */
-    if (filter->current_exposure > filter->exposure_min) {
+    if (filter->current_exposure > (filter->exposure_min + EXPOSURE_TOLERANCE)) {
       filter->target_exposure = filter->current_exposure -
           (exposure_range * 0.01 * ramp_multiplier);
       filter->target_exposure = MAX (filter->target_exposure, filter->exposure_min);
@@ -722,7 +725,7 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
     }
   } else {
     /* Too dark - increase exposure first up to max, then increase gain */
-    if (filter->current_exposure < filter->exposure_max) {
+    if (filter->current_exposure < (filter->exposure_max - EXPOSURE_TOLERANCE)) {
       filter->target_exposure = filter->current_exposure +
           (exposure_range * 0.01 * ramp_multiplier);
       filter->target_exposure = MIN (filter->target_exposure, filter->exposure_max);
@@ -731,6 +734,8 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
       filter->target_gain = MIN (filter->target_gain, filter->gain_max);
     }
   }
+  
+  #undef EXPOSURE_TOLERANCE
 
   /* Apply smooth ramping using ramp_step */
   gdouble exp_delta = filter->target_exposure - filter->current_exposure;
