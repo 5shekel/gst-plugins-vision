@@ -20,6 +20,29 @@ The `linescan` plugin simulates a line scan camera by extracting a single row or
 | `line-index` | int | -1 | Index of row/column to extract (-1 for middle of image) |
 | `output-size` | int | 800 | Number of lines to accumulate (width for horizontal mode, height for vertical mode) |
 
+## Signals
+
+### `rollover`
+
+```c
+void user_function (GstElement *linescan,
+                    GstBuffer  *buffer,
+                    gpointer    user_data)
+```
+
+Emitted when the buffer position wraps around to 0 after accumulating `output-size` lines. The `buffer` parameter contains the completed line scan image at the moment of rollover.
+
+**Parameters:**
+- `linescan`: The linescan element emitting the signal
+- `buffer`: The completed line scan buffer (read-only, contains full image)
+- `user_data`: User data set when the signal handler was connected
+
+**Use cases:**
+- Save completed line scan images to disk automatically
+- Process completed frames (e.g., run image analysis)
+- Trigger external actions when a scan cycle completes
+- Capture periodic snapshots during continuous operation
+
 ## Usage Examples
 
 ### Basic Horizontal Line Scan (Extract Row 100)
@@ -51,6 +74,74 @@ gst-launch-1.0 idsueyesrc config-file=config.ini framerate=200 ! \
     videoconvert ! \
     pngenc ! filesink location=linescan.png
 ```
+
+### Capturing Frames on Rollover (Using Signal)
+
+The `rollover` signal fires when the buffer wraps around, allowing you to capture completed frames:
+
+**Python example** (`rollover_example.py`):
+```python
+#!/usr/bin/env python3
+import gi
+gi.require_version('Gst', '1.0')
+from gi.repository import Gst
+
+frame_counter = 0
+
+def on_rollover(linescan, buffer, filesink):
+    global frame_counter
+    filename = f"linescan_{frame_counter:04d}.raw"
+    print(f"Rollover! Saving to: {filename}")
+    filesink.set_property('location', filename)
+    frame_counter += 1
+
+Gst.init(None)
+pipeline = Gst.parse_launch(
+    "videotestsrc pattern=ball ! "
+    "linescan direction=horizontal line-index=100 output-size=400 ! "
+    "tee name=t "
+    "t. ! queue ! videoconvert ! autovideosink "
+    "t. ! queue ! filesink name=fsink location=init.raw"
+)
+
+linescan = pipeline.get_by_name("linescan")
+filesink = pipeline.get_by_name("fsink")
+linescan.connect("rollover", on_rollover, filesink)
+
+pipeline.set_state(Gst.State.PLAYING)
+# ... run main loop ...
+```
+
+**Alternative: Using multifilesink with tee** (no signal needed):
+```bash
+# Automatically saves each output frame with incrementing counter
+gst-launch-1.0 videotestsrc pattern=ball ! \
+    linescan direction=horizontal line-index=100 output-size=400 ! \
+    tee name=t \
+    t. ! queue ! videoconvert ! autovideosink \
+    t. ! queue ! multifilesink location="frame_%04d.raw" max-files=100
+```
+
+**Real-world example with IDS uEye camera:**
+```powershell
+# PowerShell script (see launch_with_capture.ps1)
+$env:GST_DEBUG="linescan:5"
+
+gst-launch-1.0 idsueyesrc config-file=ini/roi-night.ini `
+    exposure=5.25 framerate=200 gain=42 name=cam device-id=2 ! `
+    intervalometer enabled=true camera-element=cam `
+    ramp-rate=vslow update-interval=1000 gain-max=52 log-file=timelapse.csv ! `
+    videocrop bottom=3 ! queue ! `
+    linescan direction=vertical output-size=1900 ! `
+    tee name=t `
+    t. ! queue ! videoconvert ! autovideosink `
+    t. ! queue ! multifilesink location="linescan_%04d.raw" max-files=100
+```
+
+See examples:
+- [`rollover_example.py`](rollover_example.py) - Basic rollover signal demo
+- [`launch_with_signal.py`](launch_with_signal.py) - Full IDS camera pipeline with signal
+- [`launch_with_capture.ps1`](launch_with_capture.ps1) - PowerShell script with multifilesink
 
 ## How It Works
 

@@ -78,6 +78,9 @@ struct _GstLinescan
 struct _GstLinescanClass
 {
   GstBaseTransformClass parent_class;
+
+  /* Signals */
+  void (*rollover) (GstLinescan *linescan, GstBuffer *buffer);
 };
 
 GType gst_linescan_get_type(void);

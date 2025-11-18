@@ -46,6 +46,15 @@
 GST_DEBUG_CATEGORY_STATIC (gst_linescan_debug);
 #define GST_CAT_DEFAULT gst_linescan_debug
 
+/* Signals */
+enum
+{
+  SIGNAL_ROLLOVER,
+  LAST_SIGNAL
+};
+
+static guint gst_linescan_signals[LAST_SIGNAL] = { 0 };
+
 /* Properties */
 enum
 {
@@ -155,6 +164,22 @@ gst_linescan_class_init (GstLinescanClass * klass)
           "Number of lines to accumulate (width for horizontal, height for vertical)",
           1, G_MAXINT, DEFAULT_PROP_OUTPUT_SIZE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  /* Install signals */
+  /**
+   * GstLinescan::rollover:
+   * @linescan: the linescan instance
+   * @buffer: the completed buffer at rollover
+   *
+   * Emitted when the buffer position wraps around to 0 after accumulating
+   * output_size lines. The buffer contains a complete line scan image.
+   * Applications can connect to this signal to save the image to disk.
+   */
+  gst_linescan_signals[SIGNAL_ROLLOVER] =
+      g_signal_new ("rollover", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (GstLinescanClass, rollover),
+      NULL, NULL, g_cclosure_marshal_VOID__BOXED,
+      G_TYPE_NONE, 1, GST_TYPE_BUFFER);
 
   /* Set element metadata */
   gst_element_class_add_pad_template (gstelement_class,
@@ -580,14 +605,17 @@ gst_linescan_transform (GstBaseTransform * trans, GstBuffer * inbuf,
   /* Increment buffer position */
   filter->buffer_position++;
 
-  /* Wrap around when we reach the output size */
+  /* Check for rollover and emit signal */
+  gboolean rollover_occurred = FALSE;
   if (filter->direction == GST_LINESCAN_DIRECTION_HORIZONTAL) {
     if (filter->buffer_position >= out_height) {
       filter->buffer_position = 0;
+      rollover_occurred = TRUE;
     }
   } else {
     if (filter->buffer_position >= out_width) {
       filter->buffer_position = 0;
+      rollover_occurred = TRUE;
     }
   }
 
@@ -596,6 +624,13 @@ gst_linescan_transform (GstBaseTransform * trans, GstBuffer * inbuf,
 
   gst_buffer_unmap (inbuf, &map_in);
   gst_buffer_unmap (outbuf, &map_out);
+
+  /* Emit rollover signal if buffer wrapped around */
+  if (rollover_occurred) {
+    GST_DEBUG_OBJECT (filter, "Rollover occurred at frame %lu",
+        (unsigned long) filter->frame_count);
+    g_signal_emit (filter, gst_linescan_signals[SIGNAL_ROLLOVER], 0, outbuf);
+  }
 
   filter->frame_count++;
 
