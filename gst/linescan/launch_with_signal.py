@@ -169,7 +169,7 @@ def on_rollover(linescan, buffer):
     # Map the buffer to get image data
     success, mapinfo = buffer.map(Gst.MapFlags.READ)
     if not success:
-        print(f"[ROLLOVER ERROR] Failed to map buffer for frame {frame_counter}")
+        # print(f"[ROLLOVER ERROR] Failed to map buffer for frame {frame_counter}")
         return
     
     try:
