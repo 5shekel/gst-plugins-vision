@@ -44,7 +44,7 @@
 #   - Camera config: ini/roi-night.ini (adjust CONFIG_FILE variable if needed)
 #   - Camera modes:
 #     * Day mode (default): exposure=0.4ms, gain=0, framerate=200fps
-#     * Night mode: exposure=5.25ms, gain=42, framerate=200fps
+#     * Night mode: exposure=5.25ms, gain=65, framerate=200fps
 #   - Device ID: 2 (set in source.set_property)
 #   - Linescan output size: 1900 pixels (set in linescan.set_property)
 #   - Output directory: results/<date>/<funny-name>/ (auto-created with funny names)
@@ -261,7 +261,7 @@ Examples:
     parser.add_argument('--output-dir', '-o', metavar='DIR',
                         help='Output directory (default: results/<date>/<funny-name>)')
     parser.add_argument('--mode', '-m', choices=['day', 'night'], default='day',
-                        help='Camera mode: day (0.4ms exposure, 0 gain) or night (5.25ms exposure, 42 gain) (default: day)')
+                        help='Camera mode: day (0.4ms exposure, 0 gain) or night (5.25ms exposure, 65 gain) (default: day)')
     
     args = parser.parse_args()
     
@@ -379,7 +379,7 @@ Examples:
         gain = 0
     else:  # night
         exposure = 5.25
-        gain = 42
+        gain = 65
     
     framerate = 200  # Same for both modes
     device_id = 2
@@ -398,7 +398,7 @@ Examples:
     intervalometer.set_property("camera-element", source)
     intervalometer.set_property("ramp-rate", "vslow")
     intervalometer.set_property("update-interval", 1000)
-    intervalometer.set_property("gain-max", 52)
+    intervalometer.set_property("gain-max", 65)
     intervalometer.set_property("log-file", "timelapse.csv")
     
     # Configure videocrop
