@@ -50,6 +50,11 @@ COMMAND [PARAMETERS]\n
 
 Commands are case-insensitive, but UPPERCASE is recommended for clarity.
 
+### Size Limits
+- **Receive Buffer**: 8192 bytes (8KB)
+- **Maximum Command Length**: 1024 characters
+- Commands exceeding 1024 characters will be rejected with an error
+
 ## Supported Commands
 
 ### 1. SET_EXPOSURE

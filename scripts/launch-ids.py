@@ -154,9 +154,15 @@ class ControlServer:
             
             while self.running:
                 try:
-                    # Receive command
-                    data, addr = self.sock.recvfrom(1024)
+                    # Receive command with larger buffer to handle malformed messages
+                    # Use 8KB buffer to prevent WinError 10040 (message too large)
+                    data, addr = self.sock.recvfrom(8192)
                     command = data.decode('utf-8', errors='ignore').strip()
+                    
+                    # Reject oversized commands (should fit in reasonable size)
+                    if len(command) > 1024:
+                        self.send_response("ERROR INVALID_SYNTAX: Command too long (max 1024 chars)", addr)
+                        continue
                     
                     if command:
                         # Process command
@@ -168,6 +174,14 @@ class ControlServer:
                 except socket.timeout:
                     # Normal timeout, continue loop
                     continue
+                except OSError as e:
+                    if self.running:
+                        # Provide specific handling for common socket errors
+                        if e.winerror == 10040:
+                            print(f"Control server error: Received oversized message (buffer overflow) - {e}")
+                            print("This usually indicates a malformed control message. Ignoring and continuing.")
+                        else:
+                            print(f"Control server socket error: {e}")
                 except Exception as e:
                     if self.running:
                         print(f"Control server error: {e}")
