@@ -250,7 +250,7 @@ Examples:
     parser.add_argument('--output-dir', '-o', metavar='DIR',
                         help='Output directory (default: results/<date>/<funny-name>)')
     parser.add_argument('--mode', '-m', choices=['day', 'night'], default='day',
-                        help='Camera mode: day (0.4ms exposure, 0 gain) or night (5.25ms exposure, 65 gain) (default: day)')
+                        help='Camera mode: day (0.2ms exposure, 0 gain) or night (5.25ms exposure, 65 gain) (default: day)')
     
     args = parser.parse_args()
     
@@ -385,9 +385,11 @@ Examples:
     # Configure intervalometer
     intervalometer.set_property("enabled", True)
     intervalometer.set_property("camera-element", source)
-    intervalometer.set_property("ramp-rate", "vslow")
-    intervalometer.set_property("update-interval", 1000)
-    intervalometer.set_property("gain-max", 65)
+    intervalometer.set_property("ramp-rate", "fast")
+    intervalometer.set_property("update-interval", 500)
+    intervalometer.set_property("brightness-deadband", 10.0)
+    intervalometer.set_property("gain-max", 82)
+    intervalometer.set_property("target-brightness", 80.0)
     intervalometer.set_property("log-file", "timelapse.csv")
     
     # Configure videocrop
