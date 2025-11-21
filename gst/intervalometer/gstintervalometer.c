@@ -62,7 +62,8 @@ enum
   PROP_LOG_FILE,
   PROP_CAMERA_ELEMENT,
   PROP_UPDATE_INTERVAL,
-  PROP_BRIGHTNESS_SMOOTHING
+  PROP_BRIGHTNESS_SMOOTHING,
+  PROP_BRIGHTNESS_DEADBAND
 };
 
 #define DEFAULT_PROP_ENABLED TRUE
@@ -77,6 +78,7 @@ enum
 #define DEFAULT_PROP_CAMERA_ELEMENT ""
 #define DEFAULT_PROP_UPDATE_INTERVAL 100  /* Update every 100ms (10 Hz) */
 #define DEFAULT_PROP_BRIGHTNESS_SMOOTHING 0.1  /* 10% new, 90% history - heavy smoothing for time-lapse */
+#define DEFAULT_PROP_BRIGHTNESS_DEADBAND 10.0  /* ±10 brightness units deadband zone */
 
 /* GStreamer boilerplate */
 #define gst_intervalometer_parent_class parent_class
@@ -242,6 +244,14 @@ gst_intervalometer_class_init (GstIntervalometerClass * klass)
           0.0, 1.0, DEFAULT_PROP_BRIGHTNESS_SMOOTHING,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_BRIGHTNESS_DEADBAND,
+      g_param_spec_double ("brightness-deadband", "Brightness Deadband",
+          "Deadband zone around target brightness where no adjustments are made (0=disabled). "
+          "Creates a stable zone to prevent oscillation. "
+          "Recommended: 10.0 for fast update rates, 5.0 for slower rates, 0.0 to disable",
+          0.0, 50.0, DEFAULT_PROP_BRIGHTNESS_DEADBAND,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   /* Set element metadata */
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_intervalometer_sink_template));
@@ -278,6 +288,7 @@ gst_intervalometer_init (GstIntervalometer * filter)
   filter->camera_element_name = g_strdup (DEFAULT_PROP_CAMERA_ELEMENT);
   filter->update_interval = DEFAULT_PROP_UPDATE_INTERVAL;
   filter->brightness_smoothing = DEFAULT_PROP_BRIGHTNESS_SMOOTHING;
+  filter->brightness_deadband = DEFAULT_PROP_BRIGHTNESS_DEADBAND;
 
   /* Initialize internal state */
   filter->camera_src = NULL;
@@ -350,6 +361,9 @@ gst_intervalometer_set_property (GObject * object, guint prop_id,
     case PROP_BRIGHTNESS_SMOOTHING:
       filter->brightness_smoothing = g_value_get_double (value);
       break;
+    case PROP_BRIGHTNESS_DEADBAND:
+      filter->brightness_deadband = g_value_get_double (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -398,6 +412,9 @@ gst_intervalometer_get_property (GObject * object, guint prop_id,
       break;
     case PROP_BRIGHTNESS_SMOOTHING:
       g_value_set_double (value, filter->brightness_smoothing);
+      break;
+    case PROP_BRIGHTNESS_DEADBAND:
+      g_value_set_double (value, filter->brightness_deadband);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -690,6 +707,7 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
 {
   gdouble error, adjusted_target, exposure_range, gain_range;
   gdouble ramp_multiplier;
+  gdouble abs_error;
 
   if (!filter->camera_src) {
     return;
@@ -698,6 +716,14 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
   /* Calculate brightness error with compensation */
   error = (filter->target_brightness - brightness) *
       pow (2.0, filter->compensation);
+
+  /* Check deadband zone - if enabled and brightness is within tolerance, skip adjustments */
+  abs_error = fabs(filter->target_brightness - brightness);
+  if (filter->brightness_deadband > 0.0 && abs_error < filter->brightness_deadband) {
+    GST_DEBUG_OBJECT (filter, "Within deadband zone (error=%.2f < %.2f), skipping adjustment",
+        abs_error, filter->brightness_deadband);
+    return;
+  }
 
   /* Adjust target brightness based on error */
   adjusted_target = filter->target_brightness + error;

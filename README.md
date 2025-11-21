@@ -35,7 +35,7 @@ udpsink host=10.81.2.183 port=5000
 now moving to automatic exposure (see [gstintervalometer](gst\intervalometer\gstintervalometer.c))
 ```pwsh
 uv run .\scripts\launch-ids.py `
-    --config .\ini\2456x4pix-500top-cw.ini `
+    --config .\ini\2456x4pix-500top-cw-extragain.ini `
     --device-id 1 `
     --framerate 750 `
     --gain 52 `
@@ -49,9 +49,25 @@ uv run .\scripts\launch-ids.py `
     intervalometer enabled=true camera-element=cam `
         ramp-rate=vslow `
         update-interval=1000 `
-        gain-ma52 `
+        gain=52 `
         log-file=timelapse.csv ! `
         videocrop bottom=3 ! queue ! udpsink host=10.81.2.183 port=5000
+```
+
+```pwsh
+$env:GST_DEBUG="linescan:5";
+
+ gst-launch-1.0 idsueyesrc config-file=ini/roi-night.ini `
+    exposure=5.25 framerate=200 gain=42 name=cam device-id=2 ! `
+    intervalometer enabled=true camera-element=cam `
+    ramp-rate=vslow `
+    update-interval=1000 `
+    gain-max=52 `
+    log-file=timelapse.csv ! `
+    videocrop bottom=3 ! `
+    queue ! `
+    linescan direction=vertical output-size=1900 ! `
+    videoconvert ! autovideosink
 ```
 
 #### Receive and Display

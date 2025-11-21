@@ -75,6 +75,7 @@ struct _GstIntervalometer
   gchar *camera_element_name;    /* Name of upstream idsueyesrc element */
   guint update_interval;         /* Update interval in milliseconds */
   gdouble brightness_smoothing;  /* Brightness smoothing factor (0-1, 0=no smoothing) */
+  gdouble brightness_deadband;   /* Deadband zone to prevent oscillation (0=disabled) */
 
   /* Internal state */
   GstElement *camera_src;        /* Reference to upstream camera element */

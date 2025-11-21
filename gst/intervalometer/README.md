@@ -73,6 +73,7 @@ make install
 | Property | Type | Range | Default | Description |
 |----------|------|-------|---------|-------------|
 | `brightness-smoothing` | double | 0.0-1.0 | 0.1 | Temporal smoothing factor (EMA alpha) |
+| `brightness-deadband` | double | 0.0-50.0 | 10.0 | Deadband zone to prevent oscillation (0=disabled) |
 
 ### Logging
 
@@ -138,6 +139,7 @@ gst-launch-1.0 \
     ramp-rate=vslow \
     update-interval=1000 \
     brightness-smoothing=0.1 \
+    brightness-deadband=10.0 \
     log-file=timelapse.csv ! \
   videocrop bottom=3 ! queue ! videoconvert ! autovideosink
 ```
@@ -146,6 +148,7 @@ gst-launch-1.0 \
 - `ramp-rate=vslow`: 5% exposure steps per update (smooth transitions)
 - `update-interval=1000`: Updates every 1 second (not too aggressive)
 - `brightness-smoothing=0.1`: Filters out moving objects (cars, people, birds)
+- `brightness-deadband=10.0`: Prevents oscillation by creating a stable zone
 
 ### Complete Time-Lapse Recording
 
@@ -166,14 +169,15 @@ gst-launch-1.0 idsueyesrc name=cam framerate=1 ! \
 
 ### Exposure Control Algorithm
 
-The filter uses a YASS-inspired algorithm:
+The filter uses a YASS-inspired algorithm with deadband control:
 
 1. **Brightness Analysis**: Calculates average brightness of each frame
-2. **Error Calculation**: Compares to target brightness (with compensation)
-3. **Ramping Priority**:
+2. **Deadband Check**: If brightness is within deadband zone, skip adjustments (prevents oscillation)
+3. **Error Calculation**: Compares to target brightness (with compensation)
+4. **Ramping Priority**:
    - When too bright: Decreases exposure first, then gain
    - When too dark: Increases exposure first (up to max), then gain
-4. **Smooth Ramping**: Changes are gradual based on ramp-rate setting
+5. **Smooth Ramping**: Changes are gradual based on ramp-rate setting
 
 ### Typical Behavior
 
@@ -246,6 +250,29 @@ smoothed_brightness = (alpha × current_brightness) + ((1 - alpha) × previous_s
 
 **Effect:** With `brightness-smoothing=0.1`, the algorithm effectively averages brightness over ~10 frames, filtering out cars, people, and birds while still tracking slow lighting trends.
 
+### Brightness Deadband
+
+The `brightness-deadband` property creates a tolerance zone around the target brightness where no adjustments are made. This prevents oscillation caused by continuous micro-adjustments.
+
+**How it works:**
+- When brightness is within ±deadband of target, no changes are made
+- When brightness exceeds the deadband, normal adjustments resume
+- Allows fast corrections when needed, prevents hunting when stable
+
+| Value | Behavior | Best For |
+|-------|----------|----------|
+| 0.0 | No deadband (disabled) | Maximum responsiveness (may oscillate) |
+| 5.0 | Narrow deadband | Slow update rates (>500ms) |
+| **10.0** | **Standard deadband (default)** | **Fast update rates (10-100ms), prevents oscillation** |
+| 20.0 | Wide deadband | Very stable, less responsive |
+
+**Example:**
+- With `target-brightness=128` and `brightness-deadband=10.0`
+- No adjustments when brightness is between 118-138
+- Adjustments resume when brightness < 118 or > 138
+
+**Important:** Higher deadband = more stability but less precision. Lower deadband = more precision but potential oscillation at fast update rates.
+
 ## Tips for Best Results
 
 ### Dawn/Dusk Time-Lapse (Recommended Configuration)
@@ -254,6 +281,7 @@ smoothed_brightness = (alpha × current_brightness) + ((1 - alpha) × previous_s
 ramp-rate: vslow (5% steps - very gradual)
 update-interval: 1000 (1 second between updates)
 brightness-smoothing: 0.1 (filter moving objects)
+brightness-deadband: 10.0 (prevent oscillation)
 exposure-min: 0.85 (or camera minimum)
 exposure-max: 1.24 (or 1/framerate)
 gain-min: 0 (cleanest image)
@@ -267,14 +295,17 @@ target-brightness: 128
 - Brightness smoothing filters transient changes (cars, people)
 - Results in smooth, flicker-free time-lapse
 
-### Fast Changing Conditions
+### Fast Changing Conditions (with Fast Update Rates)
 
 ```
 ramp-rate: fast or vfast
-update-interval: 100-500
+update-interval: 10-100 (very fast updates)
 brightness-smoothing: 0.3-1.0 (more responsive)
+brightness-deadband: 10.0-15.0 (ESSENTIAL to prevent oscillation)
 compensation: Adjust to preference (-1.0 for darker, +1.0 for brighter)
 ```
+
+**Critical:** When using fast update rates (10-100ms), `brightness-deadband` is ESSENTIAL to prevent oscillation. Without it, the algorithm will continuously overshoot and create flickering.
 
 ### Maximum Image Quality
 
@@ -284,13 +315,15 @@ ramp-rate: slow or vslow (smoother transitions)
 update-interval: 1000-2000
 ```
 
-### Avoiding Flickering
+### Avoiding Flickering and Oscillation
 
 If you experience flickering or oscillation:
-1. **Increase update-interval**: Start with 1000ms
-2. **Decrease ramp-rate**: Use `vslow` or `slow`
-3. **Enable brightness-smoothing**: Set to 0.1 or lower
-4. **Check your settings**: At 50fps, 100ms updates = every 5 frames (too fast!)
+1. **Enable deadband (MOST IMPORTANT)**: Set `brightness-deadband=10.0` or higher
+2. **Increase update-interval**: Start with 1000ms for slow changes, or keep at 10-100ms with deadband for fast response
+3. **Decrease ramp-rate**: Use `vslow` or `slow`
+4. **Enable brightness-smoothing**: Set to 0.1 or lower
+
+**The New Solution:** With the `brightness-deadband` parameter, you can now use fast update rates (10ms) with fast ramp rates without oscillation! The deadband creates a stable zone that prevents continuous micro-adjustments.
 
 ## Troubleshooting
 
@@ -300,10 +333,11 @@ If you experience flickering or oscillation:
 - Ensure `enabled=true` is set
 
 **Flickering or oscillating exposure:**
-- **Primary cause:** Update interval too fast for your frame rate
-- **Solution:** Increase `update-interval` to 1000ms
+- **Primary cause:** No deadband zone at fast update rates
+- **Solution:** Set `brightness-deadband=10.0` (or higher)
+- **Alternative:** Increase `update-interval` to 1000ms
 - **Also try:** Set `ramp-rate=vslow` and `brightness-smoothing=0.1`
-- **At 50fps:** Never use update intervals < 500ms
+- **New capability:** With deadband enabled, you CAN use fast update intervals (10-100ms) for rapid response without oscillation!
 
 **Changes too fast/slow:**
 - Adjust `ramp-rate` property
@@ -358,6 +392,18 @@ The original implementation used GObject property specs to query exposure limits
 ### Brightness Smoothing
 
 Added Exponential Moving Average (EMA) filtering to handle transient brightness changes from moving objects (cars, people, birds). This prevents exposure oscillation while maintaining responsiveness to actual lighting changes.
+
+### Brightness Deadband (Anti-Oscillation)
+
+Added deadband control to prevent continuous micro-adjustments that cause oscillation. When brightness is within the deadband zone (default ±10 units), no adjustments are made. This allows:
+- Fast update rates (10-100ms) without oscillation
+- Rapid response when changes exceed deadband
+- Stable operation at any ramp rate
+
+**Implementation in [`gstintervalometer.c:698-707`](gst/intervalometer/gstintervalometer.c:698-707):**
+- Checks absolute error against deadband before making adjustments
+- Skips exposure/gain changes when within tolerance
+- Allows full-speed corrections when brightness significantly deviates
 
 ## License
 
