@@ -64,13 +64,6 @@
 #
 # Troubleshooting:
 #
-#   Error: "unknown signal name: rollover"
-#   - Cause: Linescan plugin not found or not properly registered with GStreamer
-#   - Solution:
-#     1. Build plugins: .\build.ps1
-#     2. Ensure GST_PLUGIN_PATH environment variable includes build output directory
-#     3. Check plugin was built: look for linescan.dll in build directory
-#     4. Test plugin availability: gst-inspect-1.0 linescan
 #
 #   Error: "No such element 'linescan'" or "No such element 'idsueyesrc'"
 #   - Cause: Custom plugins not found in GST_PLUGIN_PATH
@@ -78,10 +71,6 @@
 #     1. Verify plugins are built in the output directory
 #     2. Set GST_PLUGIN_PATH to include the build directory
 #     3. Run: gst-inspect-1.0 --print-plugin-auto-install-info to check plugins
-#
-#   Error: "Not all elements could be created"
-#   - Cause: Missing GStreamer plugins or dependencies
-#   - Solution: Check that all required plugins are built and GStreamer is properly installed
 #
 # Performance Notes:
 #   - Files are saved via Python/PIL in the rollover callback (only when buffer wraps)
@@ -169,7 +158,7 @@ def on_rollover(linescan, buffer):
     # Map the buffer to get image data
     success, mapinfo = buffer.map(Gst.MapFlags.READ)
     if not success:
-        # print(f"[ROLLOVER ERROR] Failed to map buffer for frame {frame_counter}")
+        print(f"[ROLLOVER ERROR] Failed to map buffer for frame {frame_counter}")
         return
     
     try:
@@ -208,7 +197,7 @@ def on_rollover(linescan, buffer):
         else:
             img.save(filename, 'JPEG', quality=95)
         
-        print(f"[ROLLOVER] Frame {frame_counter} saved to: {filename}")
+        # print(f"[ROLLOVER] Frame {frame_counter} saved to: {filename}")
         
     except Exception as e:
         print(f"[ROLLOVER ERROR] Failed to save frame {frame_counter}: {e}")
