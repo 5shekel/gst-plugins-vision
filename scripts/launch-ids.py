@@ -17,6 +17,9 @@
 # Basic Usage:
 #   uv run .\scripts\launch-ids.py                    # Use all defaults
 #   uv run .\scripts\launch-ids.py --help             # Show all options
+#   uv run .\scripts\launch-ids.py --mode day         # Day mode preset (0.2ms, 0 gain)
+#   uv run .\scripts\launch-ids.py --mode night       # Night mode preset (5.25ms, 65 gain)
+#   uv run .\scripts\launch-ids.py --intervalometer   # Enable auto-exposure control
 #   uv run .\scripts\launch-ids.py exposure 16        # Set exposure to 16ms (simplified)
 #   uv run .\scripts\launch-ids.py framerate 30       # Set framerate to 30fps (simplified)
 #   uv run .\scripts\launch-ids.py gain 50            # Set gain to 50 (simplified)
@@ -26,7 +29,7 @@
 #   uv run .\scripts\launch-ids.py --display          # Enable 1/4 sized preview window
 #
 # Features:
-#   - Configurable video streaming (default: UDP port 5000 to 127.0.0.1)
+#   - Configurable video streaming (default: UDP port 5000 to 10.81.2.183)
 #   - Optional control interface (default: UDP port 5001 on 0.0.0.0)
 #   - Dynamic exposure control (0.015-30000 milliseconds, default: 10ms)
 #   - Auto-exposure mode support (--auto-exposure flag)
@@ -510,6 +513,9 @@ def parse_arguments():
         epilog="""
 Examples:
   %(prog)s                                    # Use all defaults
+  %(prog)s --mode day                         # Day mode (0.2ms, 0 gain)
+  %(prog)s --mode night                       # Night mode (5.25ms, 65 gain)
+  %(prog)s --mode day --intervalometer        # Day mode with auto-exposure
   %(prog)s exposure 16                        # Set exposure to 16ms
   %(prog)s framerate 30                       # Set framerate to 30fps
   %(prog)s gain 50                            # Set gain to 50
@@ -532,12 +538,34 @@ Examples:
                         nargs='?',
                         help='Value to set for the property (simplified syntax)')
     
+    # Mode selection
+    mode_group = parser.add_argument_group('Mode Selection')
+    mode_group.add_argument(
+        '--mode', '-m',
+        choices=['day', 'night'],
+        default='day',
+        help='Camera mode preset: day (0.2ms exposure, 0 gain, 200fps) or night (5.25ms exposure, 65 gain, 200fps)'
+    )
+    mode_group.add_argument(
+        '--intervalometer',
+        dest='intervalometer',
+        action='store_true',
+        default=True,
+        help='Enable intervalometer for automatic exposure control (enabled by default)'
+    )
+    mode_group.add_argument(
+        '--no-intervalometer',
+        dest='intervalometer',
+        action='store_false',
+        help='Disable intervalometer'
+    )
+    
     # Camera configuration
     camera_group = parser.add_argument_group('Camera Settings')
     camera_group.add_argument(
         '--config', '--config-file',
         type=str,
-        default='ini/100fps-10exp-2456x4pix-500top-cw-extragain.ini',
+        default='ini/2456x4pix-500top-cw-extragain.ini',
         metavar='PATH',
         help='Camera configuration file path'
     )
@@ -565,7 +593,7 @@ Examples:
     camera_group.add_argument(
         '--device-id',
         type=int,
-        default=0,
+        default=1,
         metavar='ID',
         help='Device ID (system enumeration, 0 is first, 0-254)'
     )
@@ -624,7 +652,7 @@ Examples:
     network_group.add_argument(
         '--host', '--udp-host',
         type=str,
-        default='127.0.0.1',
+        default='10.81.2.183',
         metavar='IP',
         help='UDP streaming destination host'
     )
@@ -703,6 +731,22 @@ Examples:
             parser.error(f"Invalid value '{args.value}' for property '{args.property}'")
     elif args.property and not args.value:
         parser.error(f"Property '{args.property}' requires a value")
+    
+    # Handle mode presets (day is default)
+    if args.mode == 'day':
+        if args.exposure is None:
+            args.exposure = 0.2
+        if args.gain is None:
+            args.gain = 0
+        if args.framerate is None:
+            args.framerate = 200
+    elif args.mode == 'night':
+        if args.exposure is None:
+            args.exposure = 5.25
+        if args.gain is None:
+            args.gain = 65
+        if args.framerate is None:
+            args.framerate = 200
     
     # Validation - only validate if provided
     if args.exposure is not None and (args.exposure < 0.015 or args.exposure > 30000):
@@ -795,8 +839,30 @@ if args.auto_gain:
 if args.gain_boost:
     src.set_property("gain-boost", True)
 
-# Video crop to remove bottom pixels (if enabled)
+# Build pipeline elements list
 elements_to_link = [src]
+
+# Add intervalometer if enabled
+if args.intervalometer:
+    intervalometer = Gst.ElementFactory.make("intervalometer", "intervalometer")
+    if not intervalometer:
+        print("ERROR: Could not create intervalometer element")
+        print("Make sure the intervalometer plugin is built and in GST_PLUGIN_PATH")
+        exit(1)
+    
+    # Configure intervalometer
+    intervalometer.set_property("enabled", True)
+    intervalometer.set_property("camera-element", "src")
+    intervalometer.set_property("ramp-rate", "slow")
+    intervalometer.set_property("update-interval", 500)
+    intervalometer.set_property("brightness-deadband", 10.0)
+    intervalometer.set_property("gain-max", 82)
+    intervalometer.set_property("target-brightness", 80.0)
+    intervalometer.set_property("log-file", "timelapse.csv")
+    
+    elements_to_link.append(intervalometer)
+
+# Video crop to remove bottom pixels (if enabled)
 if args.crop_bottom > 0:
     videocrop = Gst.ElementFactory.make("videocrop", "crop")
     videocrop.set_property("bottom", args.crop_bottom)
@@ -933,6 +999,8 @@ if not args.quiet:
     print("=" * 60)
     print("IDS uEye Camera - Pipeline Configuration")
     print("=" * 60)
+    if args.mode:
+        print(f"Mode:           {args.mode}")
     print(f"Camera config:  {args.config}")
     print(f"Camera ID:      {args.camera_id}")
     print(f"Device ID:      {args.device_id}")
@@ -951,6 +1019,15 @@ if not args.quiet:
     print(f"Auto-exposure:  {'enabled' if args.auto_exposure else '(from INI file)'}")
     print(f"Auto-gain:      {'enabled' if args.auto_gain else '(from INI file)'}")
     print(f"Gain boost:     {'enabled' if args.gain_boost else '(from INI file)'}")
+    if args.intervalometer:
+        print()
+        print("Intervalometer: enabled")
+        print("  Ramp rate:    slow")
+        print("  Update int:   500 ms")
+        print("  Deadband:     10.0")
+        print("  Gain max:     82")
+        print("  Target bright: 80")
+        print("  Log file:     timelapse.csv")
     if args.crop_bottom > 0:
         print(f"Crop bottom:    {args.crop_bottom} pixels")
     else:
