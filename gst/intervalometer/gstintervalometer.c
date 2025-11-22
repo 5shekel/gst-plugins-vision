@@ -720,7 +720,7 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
   /* Check deadband zone - if enabled and brightness is within tolerance, skip adjustments */
   abs_error = fabs(filter->target_brightness - brightness);
   if (filter->brightness_deadband > 0.0 && abs_error < filter->brightness_deadband) {
-    GST_DEBUG_OBJECT (filter, "Within deadband zone (error=%.2f < %.2f), skipping adjustment",
+    GST_LOG_OBJECT (filter, "Within deadband zone (error=%.2f < %.2f), skipping adjustment",
         abs_error, filter->brightness_deadband);
     return;
   }
