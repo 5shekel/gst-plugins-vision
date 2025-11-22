@@ -12,6 +12,5 @@ if (ENABLE_KLV)
 endif ()
 
 add_subdirectory (misb)
-add_subdirectory (rollingsum)
 add_subdirectory (select)
 add_subdirectory (videoadjust)
