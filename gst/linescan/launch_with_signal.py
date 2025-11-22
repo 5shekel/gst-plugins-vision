@@ -384,8 +384,8 @@ Examples:
     
     # Configure intervalometer
     intervalometer.set_property("enabled", True)
-    intervalometer.set_property("camera-element", source)
-    intervalometer.set_property("ramp-rate", "fast")
+    intervalometer.set_property("camera-element", "source")
+    intervalometer.set_property("ramp-rate", "slow")
     intervalometer.set_property("update-interval", 500)
     intervalometer.set_property("brightness-deadband", 10.0)
     intervalometer.set_property("gain-max", 82)
