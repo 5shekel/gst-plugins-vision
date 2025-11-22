@@ -7,8 +7,11 @@
 # ///
 
 """
-Stitch linescan frame sequences horizontally and create scrolling video.
-Linescan images are concatenated side-by-side and played as a scrolling video.
+Create scrolling panorama videos from linescan image sequences.
+
+This script stitches linescan images horizontally into a wide panorama,
+then creates a scrolling video that pans left-to-right across the stitched image.
+The scroll speed is calibrated to the linescan capture rate (750 lines/second by default).
 """
 
 import argparse
