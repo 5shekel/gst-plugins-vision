@@ -119,6 +119,64 @@ gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.in
 - GStreamer 1.2.x or newer
 - IDS uEye SDK (for camera support)
 
+## Building on Linux/ARM64
+
+### Quick Start with Build Script
+
+The easiest way to build on Linux (including ARM64/aarch64) is using the provided build script:
+
+```bash
+# Build all plugins and install to system directories
+./build.sh
+
+# Build only IDS uEye plugin
+./build.sh --build-type idsueye-only
+
+# Build in debug mode without installing
+./build.sh --config debug --no-install
+
+# Show help
+./build.sh --help
+```
+
+### Manual Build Process
+
+1. Install dependencies:
+```bash
+sudo apt-get update
+sudo apt-get install cmake build-essential
+sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+sudo apt-get install liborc-0.4-dev libglib2.0-dev
+```
+
+2. Install IDS uEye SDK (for camera support):
+   - Download ARM64 version from [IDS website](https://en.ids-imaging.com)
+   - Or use system packages if available
+
+3. Build:
+```bash
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
+sudo make install
+```
+
+### Verification
+```bash
+# Verify plugin installation
+gst-inspect-1.0 idsueyesrc
+gst-inspect-1.0 linescan
+gst-inspect-1.0 intervalometer
+
+# Test with IDS camera (if connected)
+gst-launch-1.0 idsueyesrc device-id=1 num-buffers=100 ! videoconvert ! autovideosink
+```
+
+**Tested Platforms:**
+- ✅ Linux ARM64 (aarch64) - Jetson Xavier/Orin with Ubuntu 20.04 LTS
+- ✅ Linux x86_64
+- ✅ Windows x86_64
+
 ## Building on Windows
 
 ### Quick Start with PowerShell Script
