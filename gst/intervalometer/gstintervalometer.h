@@ -25,7 +25,7 @@
 #include <gst/video/video.h>
 
 #define _PURE_C
-#include "../../sys/idsueye/include/ueye.h"
+#include "../../sys/idsueye/include/uEye.h"
 
 G_BEGIN_DECLS
 

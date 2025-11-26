@@ -29,19 +29,29 @@ endif (WIN32)
 
 if (UNIX)
     if (NOT IDSUEYE_DIR)
-        set (IDSUEYE_DIR "/usr" CACHE PATH "Directory containing IDS uEye SDK includes and libraries")
+        set (IDSUEYE_DIR "/opt/ids/ueye" CACHE PATH "Directory containing IDS uEye SDK includes and libraries")
     endif ()
 
     set(_LIB_NAME "libueye_api.so")
 
-    find_path (IDSUEYE_INCLUDE_DIR ueye.h
+    find_path (IDSUEYE_INCLUDE_DIR uEye.h
     PATHS
+    "${CMAKE_CURRENT_SOURCE_DIR}/sys/idsueye/include"
     "${IDSUEYE_DIR}/include"
+    "/opt/ids/ueye/include"
+    "/usr/include/ueye"
+    "/usr/include"
     DOC "Directory containing IDS uEye include files")
 endif (UNIX)
 
 find_library (_uEyeLib NAMES ${_LIB_NAME}
 PATHS
+"${IDSUEYE_DIR}/lib"
+"${IDSUEYE_DIR}/lib/aarch64-linux-gnu"
+"${IDSUEYE_DIR}/lib/arm-linux-gnueabihf"
+"/opt/ids/ueye/lib"
+"/opt/ids/ueye/lib/aarch64-linux-gnu"
+"/opt/ids/ueye/lib/arm-linux-gnueabihf"
 "${IDSUEYE_DIR}/Lib")
 
 set (IDSUEYE_LIBRARIES ${_uEyeLib})

@@ -48,7 +48,11 @@ endif ()
 
 find_library(GSTREAMER_LIBRARY
              NAMES gstreamer-${GSTREAMER_ABI_VERSION}
-             HINTS ${PKG_GSTREAMER_LIBRARY_DIRS} ${PKG_GSTREAMER_LIBDIR} ${GSTREAMER_ROOT}/lib ${GSTREAMER_ROOT}/lib/aarch64-linux-gnu)
+             HINTS ${PKG_GSTREAMER_LIBRARY_DIRS} ${PKG_GSTREAMER_LIBDIR} ${GSTREAMER_ROOT}/lib
+                   ${GSTREAMER_ROOT}/lib/aarch64-linux-gnu
+                   ${GSTREAMER_ROOT}/lib/arm-linux-gnueabihf
+                   /usr/lib/aarch64-linux-gnu
+                   /usr/lib/arm-linux-gnueabihf)
 
 find_path(GSTREAMER_INCLUDE_DIR
           gst/gst.h

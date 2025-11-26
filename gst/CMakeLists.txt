@@ -4,7 +4,12 @@ endif (OPENCV_FOUND)
 
 add_subdirectory (bayerutils)
 add_subdirectory (extractcolor)
-add_subdirectory (intervalometer)
+
+# Only build intervalometer if IDS uEye SDK is available
+if (IDSUEYE_FOUND)
+  add_subdirectory (intervalometer)
+endif (IDSUEYE_FOUND)
+
 add_subdirectory (linescan)
 
 if (ENABLE_KLV)
