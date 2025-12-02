@@ -46,4 +46,4 @@ Write-Host "Launching linescan pipeline in $Mode mode..."
 Write-Host ""
 
 # All configuration is handled by launch-ids.py defaults
-uv run .\scripts\launch-ids.py --mode $Mode
+uv run .\scripts\launch-ids.py --mode $Mode --device-id 2
