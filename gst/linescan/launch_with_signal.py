@@ -186,11 +186,14 @@ def on_rollover(linescan, buffer):
             print(f"[ROL LOVER WARNING] Unsupported format {format_str}, saving as-is")
             data = data.reshape((height, width, -1))
         
-        # Create PIL Image and save
+        # Create PIL Image and flip vertically
         if channels == 1:
             img = Image.fromarray(data, mode='L')
         else:
             img = Image.fromarray(data, mode='RGB')
+        
+        # Flip vertically to match display output
+        img = img.transpose(Image.FLIP_TOP_BOTTOM)
         
         if file_format == 'png':
             img.save(filename, 'PNG')
@@ -318,7 +321,8 @@ Examples:
     queue1 = Gst.ElementFactory.make("queue", "queue1")
     linescan = Gst.ElementFactory.make("linescan", "linescan")
     
-    # Display output
+    # Output flip and display
+    videoflip_output = Gst.ElementFactory.make("videoflip", "flip_output")
     videoconvert = Gst.ElementFactory.make("videoconvert", "convert")
     videosink = Gst.ElementFactory.make("autovideosink", "videosink")
     
@@ -331,6 +335,7 @@ Examples:
         'queue1': queue1,
         'linescan': linescan,
         'videoflip': videoflip,
+        'videoflip_output': videoflip_output,
         'videoconvert': videoconvert,
         'videosink': videosink
     }
@@ -406,8 +411,13 @@ Examples:
     linescan.set_property("direction", 1)  # vertical
     linescan.set_property("output-size", 1900)
     
+    # Configure output flip (vertical flip)
+    # Available methods: 0:none, 1:clockwise, 2:rotate-180, 3:counterclockwise,
+    # 4:horizontal-flip, 5:vertical-flip, 6:upper-left-diagonal, 7:upper-right-diagonal, 8:automatic
+    videoflip_output.set_property("method", 5)
+    
     if args.debug:
-        print(f"Camera rotated 90° clockwise, then vertical linescan with output-size=1900")
+        print(f"Camera rotated 90° clockwise, then vertical linescan with output-size=1900, output flipped vertically")
     
     # Connect rollover signal - files are saved in the callback
     linescan.connect("rollover", on_rollover)
@@ -419,6 +429,7 @@ Examples:
     pipeline.add(videoflip)
     pipeline.add(queue1)
     pipeline.add(linescan)
+    pipeline.add(videoflip_output)
     pipeline.add(videoconvert)
     pipeline.add(videosink)
     
@@ -438,8 +449,11 @@ Examples:
     if not queue1.link(linescan):
         print("ERROR: Could not link queue1 to linescan")
         return -1
-    if not linescan.link(videoconvert):
-        print("ERROR: Could not link linescan to videoconvert")
+    if not linescan.link(videoflip_output):
+        print("ERROR: Could not link linescan to videoflip_output")
+        return -1
+    if not videoflip_output.link(videoconvert):
+        print("ERROR: Could not link videoflip_output to videoconvert")
         return -1
     if not videoconvert.link(videosink):
         print("ERROR: Could not link videoconvert to videosink")
