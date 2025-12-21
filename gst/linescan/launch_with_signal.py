@@ -401,7 +401,6 @@ Examples:
     # Available methods: 0:none, 1:clockwise, 2:rotate-180, 3:counterclockwise, 
     # 4:horizontal-flip, 5:vertical-flip, 6:upper-left-diagonal, 7:upper-right-diagonal, 8:automatic
     videoflip.set_property("method", 1)
-    videoflip.set_property("method", 1)
     
     # Configure linescan
     linescan.set_property("direction", 1)  # vertical
