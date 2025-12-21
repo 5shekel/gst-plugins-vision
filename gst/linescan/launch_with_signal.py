@@ -31,12 +31,12 @@
 #   - File output with automatic sequential numbering
 #   - IDS uEye camera source with intervalometer integration
 #   - Configurable camera settings (exposure, framerate, gain)
-#   - Horizontal linescan direction with 1900px output size, rotated 90° for vertical display
+#   - Camera rotated 90° clockwise, then vertical linescan with 1900px output size
 #   - 3-pixel bottom crop for sensor cleanup
 #   - Dual output via tee element (display + file save)
 #
 # Pipeline Architecture:
-#   idsueyesrc -> intervalometer -> videocrop -> queue -> linescan -> videoflip -> videoconvert -> autovideosink
+#   idsueyesrc -> intervalometer -> videocrop -> videoflip -> queue -> linescan -> videoconvert -> autovideosink
 #
 #   Note: Files are saved via Python in the rollover signal callback, not through the pipeline
 #
@@ -186,16 +186,12 @@ def on_rollover(linescan, buffer):
             print(f"[ROL LOVER WARNING] Unsupported format {format_str}, saving as-is")
             data = data.reshape((height, width, -1))
         
-        # Create PIL Image
+        # Create PIL Image and save
         if channels == 1:
             img = Image.fromarray(data, mode='L')
         else:
             img = Image.fromarray(data, mode='RGB')
         
-        # Rotate 90 degrees clockwise to display horizontally-scanned image vertically
-        img = img.transpose(Image.ROTATE_270)
-        
-        # Save rotated image
         if file_format == 'png':
             img.save(filename, 'PNG')
         else:
@@ -318,11 +314,11 @@ Examples:
     source = Gst.ElementFactory.make("idsueyesrc", "source")
     intervalometer = Gst.ElementFactory.make("intervalometer", "intervalometer")
     videocrop = Gst.ElementFactory.make("videocrop", "crop")
+    videoflip = Gst.ElementFactory.make("videoflip", "flip")
     queue1 = Gst.ElementFactory.make("queue", "queue1")
     linescan = Gst.ElementFactory.make("linescan", "linescan")
     
-    # Display output with rotation
-    videoflip = Gst.ElementFactory.make("videoflip", "flip")
+    # Display output
     videoconvert = Gst.ElementFactory.make("videoconvert", "convert")
     videosink = Gst.ElementFactory.make("autovideosink", "videosink")
     
@@ -401,16 +397,18 @@ Examples:
     # Configure videocrop
     videocrop.set_property("bottom", 3)
     
-    # Configure linescan
-    linescan.set_property("direction", 0)  # horizontal
-    linescan.set_property("output-size", 1900)
-    
     # Configure videoflip to rotate 90 degrees clockwise (method=1 is clockwise)
+    # Available methods: 0:none, 1:clockwise, 2:rotate-180, 3:counterclockwise, 
+    # 4:horizontal-flip, 5:vertical-flip, 6:upper-left-diagonal, 7:upper-right-diagonal, 8:automatic
+    videoflip.set_property("method", 1)
     videoflip.set_property("method", 1)
     
+    # Configure linescan
+    linescan.set_property("direction", 1)  # vertical
+    linescan.set_property("output-size", 1900)
+    
     if args.debug:
-        print(f"Linescan: direction=horizontal, output-size=1900")
-        print(f"Display and files rotated 90° clockwise for vertical presentation")
+        print(f"Camera rotated 90° clockwise, then vertical linescan with output-size=1900")
     
     # Connect rollover signal - files are saved in the callback
     linescan.connect("rollover", on_rollover)
@@ -419,9 +417,9 @@ Examples:
     pipeline.add(source)
     pipeline.add(intervalometer)
     pipeline.add(videocrop)
+    pipeline.add(videoflip)
     pipeline.add(queue1)
     pipeline.add(linescan)
-    pipeline.add(videoflip)
     pipeline.add(videoconvert)
     pipeline.add(videosink)
     
@@ -432,17 +430,17 @@ Examples:
     if not intervalometer.link(videocrop):
         print("ERROR: Could not link intervalometer to videocrop")
         return -1
-    if not videocrop.link(queue1):
-        print("ERROR: Could not link videocrop to queue1")
+    if not videocrop.link(videoflip):
+        print("ERROR: Could not link videocrop to videoflip")
+        return -1
+    if not videoflip.link(queue1):
+        print("ERROR: Could not link videoflip to queue1")
         return -1
     if not queue1.link(linescan):
         print("ERROR: Could not link queue1 to linescan")
         return -1
-    if not linescan.link(videoflip):
-        print("ERROR: Could not link linescan to videoflip")
-        return -1
-    if not videoflip.link(videoconvert):
-        print("ERROR: Could not link videoflip to videoconvert")
+    if not linescan.link(videoconvert):
+        print("ERROR: Could not link linescan to videoconvert")
         return -1
     if not videoconvert.link(videosink):
         print("ERROR: Could not link videoconvert to videosink")
