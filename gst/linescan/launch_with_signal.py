@@ -254,6 +254,8 @@ Examples:
                         help='Output directory (default: results/<date>/<funny-name>)')
     parser.add_argument('--mode', '-m', choices=['day', 'night'], default='day',
                         help='Camera mode: day (0.2ms exposure, 0 gain) or night (5.25ms exposure, 65 gain) (default: day)')
+    parser.add_argument('--framerate', '-r', type=int, default=200, metavar='FPS',
+                        help='Camera framerate in fps (default: 200)')
     
     args = parser.parse_args()
     
@@ -377,7 +379,7 @@ Examples:
         exposure = 5.25
         gain = 65
     
-    framerate = 200  # Same for both modes
+    framerate = args.framerate
     device_id = 1
     
     source.set_property("exposure", exposure)
