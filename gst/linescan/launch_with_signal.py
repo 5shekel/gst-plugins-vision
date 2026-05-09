@@ -324,7 +324,6 @@ Examples:
     linescan = Gst.ElementFactory.make("linescan", "linescan")
     
     # Output flip and display
-    videoflip_output = Gst.ElementFactory.make("videoflip", "flip_output")
     videoconvert = Gst.ElementFactory.make("videoconvert", "convert")
     videosink = Gst.ElementFactory.make("autovideosink", "videosink")
     
@@ -337,7 +336,6 @@ Examples:
         'queue1': queue1,
         'linescan': linescan,
         'videoflip': videoflip,
-        'videoflip_output': videoflip_output,
         'videoconvert': videoconvert,
         'videosink': videosink
     }
@@ -413,10 +411,6 @@ Examples:
     linescan.set_property("direction", 1)  # vertical
     linescan.set_property("output-size", 1900)
     
-    # Configure output flip (vertical flip)
-    # Available methods: 0:none, 1:clockwise, 2:rotate-180, 3:counterclockwise,
-    # 4:horizontal-flip, 5:vertical-flip, 6:upper-left-diagonal, 7:upper-right-diagonal, 8:automatic
-    videoflip_output.set_property("method", 5)
     
     if args.debug:
         print(f"Camera rotated 90° clockwise, then vertical linescan with output-size=1900, output flipped vertically")
@@ -431,7 +425,6 @@ Examples:
     pipeline.add(videoflip)
     pipeline.add(queue1)
     pipeline.add(linescan)
-    pipeline.add(videoflip_output)
     pipeline.add(videoconvert)
     pipeline.add(videosink)
     
@@ -450,12 +443,6 @@ Examples:
         return -1
     if not queue1.link(linescan):
         print("ERROR: Could not link queue1 to linescan")
-        return -1
-    if not linescan.link(videoflip_output):
-        print("ERROR: Could not link linescan to videoflip_output")
-        return -1
-    if not videoflip_output.link(videoconvert):
-        print("ERROR: Could not link videoflip_output to videoconvert")
         return -1
     if not videoconvert.link(videosink):
         print("ERROR: Could not link videoconvert to videosink")
@@ -484,7 +471,7 @@ Examples:
     if ret == Gst.StateChangeReturn.FAILURE:
         print("\nERROR: Unable to set pipeline to playing state")
         print("\nPossible causes:")
-        print("  1. Camera not connected or unavailable (device-id=2)")
+        print("  1. Camera not connected or unavailable (device-id=1)")
         print("  2. Config file issue: check if ini/roi-night.ini exists and is valid")
         print("  3. Element compatibility issues")
         print("\nTo debug further:")
