@@ -59,6 +59,7 @@ struct _GstLinescan
   GstLinescanDirection direction;  /* HORIZONTAL or VERTICAL */
   gint line_index;                 /* Which row/column to extract (-1 = middle) */
   gint output_size;                /* Number of lines to accumulate (width for vertical, height for horizontal) */
+  gint emit_every;                 /* Push the roll buffer downstream only every Nth frame (1 = every frame) */
 
   /* Video info */
   GstVideoInfo video_info_in;
@@ -71,7 +72,9 @@ struct _GstLinescan
   gsize line_size;                 /* Size of one line in bytes */
   gint actual_line_index;          /* Computed line index to extract */
   guint64 frame_count;             /* Number of frames processed */
-  
+  gint frames_since_emit;          /* Frames accumulated since the last downstream push */
+  gboolean will_emit;              /* Whether the current frame's output buffer is pushed (set in prepare_output_buffer) */
+
   gboolean output_caps_set;        /* Whether output caps have been negotiated */
 };
 

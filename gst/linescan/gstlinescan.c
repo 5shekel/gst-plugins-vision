@@ -27,6 +27,11 @@
  * (typically 200-750 fps). The user sets the output width, and the height
  * is determined by the input resolution.
  *
+ * One column/row is accumulated per input frame. By default a full-image
+ * output buffer is pushed downstream on every frame; set #GstLinescan:emit-every
+ * to N to push only every Nth frame (plus every rollover), keeping the large
+ * per-frame copy off the hot path at high framerates.
+ *
  * <refsect2>
  * <title>Example launch line</title>
  * |[
@@ -61,12 +66,14 @@ enum
   PROP_0,
   PROP_DIRECTION,
   PROP_LINE_INDEX,
-  PROP_OUTPUT_SIZE
+  PROP_OUTPUT_SIZE,
+  PROP_EMIT_EVERY
 };
 
 #define DEFAULT_PROP_DIRECTION GST_LINESCAN_DIRECTION_HORIZONTAL
 #define DEFAULT_PROP_LINE_INDEX -1  /* -1 means middle of image */
 #define DEFAULT_PROP_OUTPUT_SIZE 800
+#define DEFAULT_PROP_EMIT_EVERY 1  /* push every accumulated frame */
 
 /* GStreamer boilerplate */
 #define gst_linescan_parent_class parent_class
@@ -125,6 +132,8 @@ static gboolean gst_linescan_transform_size (GstBaseTransform * trans,
     GstCaps * othercaps, gsize * othersize);
 static GstFlowReturn gst_linescan_transform (GstBaseTransform * trans,
     GstBuffer * inbuf, GstBuffer * outbuf);
+static GstFlowReturn gst_linescan_prepare_output_buffer (GstBaseTransform * trans,
+    GstBuffer * inbuf, GstBuffer ** outbuf);
 
 /* Helper functions */
 static void gst_linescan_reset (GstLinescan * filter);
@@ -165,6 +174,16 @@ gst_linescan_class_init (GstLinescanClass * klass)
           1, G_MAXINT, DEFAULT_PROP_OUTPUT_SIZE,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_EMIT_EVERY,
+      g_param_spec_int ("emit-every", "Emit Every N Frames",
+          "Push the accumulated roll buffer downstream only every Nth input "
+          "frame (plus always on rollover, so the rollover signal cadence is "
+          "unchanged). One column is still accumulated per input frame. "
+          "1 = emit every frame (default); set to ~framerate/preview-fps to "
+          "keep the full-roll copy off the per-frame hot path at high framerates",
+          1, G_MAXINT, DEFAULT_PROP_EMIT_EVERY,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   /* Install signals */
   /**
    * GstLinescan::rollover:
@@ -200,6 +219,8 @@ gst_linescan_class_init (GstLinescanClass * klass)
   gstbasetransform_class->fixate_caps = GST_DEBUG_FUNCPTR (gst_linescan_fixate_caps);
   gstbasetransform_class->transform_size = GST_DEBUG_FUNCPTR (gst_linescan_transform_size);
   gstbasetransform_class->transform = GST_DEBUG_FUNCPTR (gst_linescan_transform);
+  gstbasetransform_class->prepare_output_buffer =
+      GST_DEBUG_FUNCPTR (gst_linescan_prepare_output_buffer);
 }
 
 static void
@@ -209,6 +230,7 @@ gst_linescan_init (GstLinescan * filter)
   filter->direction = DEFAULT_PROP_DIRECTION;
   filter->line_index = DEFAULT_PROP_LINE_INDEX;
   filter->output_size = DEFAULT_PROP_OUTPUT_SIZE;
+  filter->emit_every = DEFAULT_PROP_EMIT_EVERY;
 
   /* Initialize internal state */
   filter->line_buffer = NULL;
@@ -216,6 +238,8 @@ gst_linescan_init (GstLinescan * filter)
   filter->line_size = 0;
   filter->actual_line_index = 0;
   filter->frame_count = 0;
+  filter->frames_since_emit = 0;
+  filter->will_emit = TRUE;
   filter->video_info_valid = FALSE;
   filter->output_caps_set = FALSE;
 
@@ -241,6 +265,9 @@ gst_linescan_set_property (GObject * object, guint prop_id,
       filter->output_size = g_value_get_int (value);
       gst_linescan_reset (filter);
       break;
+    case PROP_EMIT_EVERY:
+      filter->emit_every = g_value_get_int (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -262,6 +289,9 @@ gst_linescan_get_property (GObject * object, guint prop_id,
       break;
     case PROP_OUTPUT_SIZE:
       g_value_set_int (value, filter->output_size);
+      break;
+    case PROP_EMIT_EVERY:
+      g_value_set_int (value, filter->emit_every);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -291,6 +321,8 @@ gst_linescan_start (GstBaseTransform * trans)
 
   filter->frame_count = 0;
   filter->buffer_position = 0;
+  filter->frames_since_emit = 0;
+  filter->will_emit = TRUE;
 
   return TRUE;
 }
@@ -539,7 +571,7 @@ gst_linescan_transform (GstBaseTransform * trans, GstBuffer * inbuf,
   gint in_width, in_height, in_stride;
   gint out_width, out_height, out_stride;
   gint pixel_stride;
-  gint x, y;
+  gint y;
 
   if (!filter->video_info_valid || !filter->line_buffer) {
     GST_ERROR_OBJECT (filter, "Not properly initialized");
@@ -548,12 +580,6 @@ gst_linescan_transform (GstBaseTransform * trans, GstBuffer * inbuf,
 
   if (!gst_buffer_map (inbuf, &map_in, GST_MAP_READ)) {
     GST_ERROR_OBJECT (filter, "Failed to map input buffer");
-    return GST_FLOW_ERROR;
-  }
-
-  if (!gst_buffer_map (outbuf, &map_out, GST_MAP_WRITE)) {
-    GST_ERROR_OBJECT (filter, "Failed to map output buffer");
-    gst_buffer_unmap (inbuf, &map_in);
     return GST_FLOW_ERROR;
   }
 
@@ -573,7 +599,6 @@ gst_linescan_transform (GstBaseTransform * trans, GstBuffer * inbuf,
       GST_WARNING_OBJECT (filter, "Line index %d exceeds input height %d",
           filter->actual_line_index, in_height);
       gst_buffer_unmap (inbuf, &map_in);
-      gst_buffer_unmap (outbuf, &map_out);
       return GST_FLOW_ERROR;
     }
 
@@ -590,7 +615,6 @@ gst_linescan_transform (GstBaseTransform * trans, GstBuffer * inbuf,
       GST_WARNING_OBJECT (filter, "Line index %d exceeds input width %d",
           filter->actual_line_index, in_width);
       gst_buffer_unmap (inbuf, &map_in);
-      gst_buffer_unmap (outbuf, &map_out);
       return GST_FLOW_ERROR;
     }
 
@@ -604,8 +628,9 @@ gst_linescan_transform (GstBaseTransform * trans, GstBuffer * inbuf,
 
   /* Increment buffer position */
   filter->buffer_position++;
+  filter->frames_since_emit++;
 
-  /* Check for rollover and emit signal */
+  /* Check for rollover */
   gboolean rollover_occurred = FALSE;
   if (filter->direction == GST_LINESCAN_DIRECTION_HORIZONTAL) {
     if (filter->buffer_position >= out_height) {
@@ -619,10 +644,31 @@ gst_linescan_transform (GstBaseTransform * trans, GstBuffer * inbuf,
     }
   }
 
+  gst_buffer_unmap (inbuf, &map_in);
+  filter->frame_count++;
+
+  /* Decimation: on frames we are not emitting, the column has been accumulated
+   * into line_buffer above (cheap) but the full-roll copy + downstream push is
+   * skipped. gst_linescan_prepare_output_buffer() already decided this and
+   * handed us a placeholder outbuf, so just tell BaseTransform to drop it. */
+  if (!filter->will_emit) {
+    GST_LOG_OBJECT (filter, "Frame %lu accumulated, output dropped "
+        "(%d/%d since last emit, position %d)",
+        (unsigned long) filter->frame_count, filter->frames_since_emit,
+        filter->emit_every, filter->buffer_position);
+    return GST_BASE_TRANSFORM_FLOW_DROPPED;
+  }
+
+  filter->frames_since_emit = 0;
+
+  if (!gst_buffer_map (outbuf, &map_out, GST_MAP_WRITE)) {
+    GST_ERROR_OBJECT (filter, "Failed to map output buffer");
+    return GST_FLOW_ERROR;
+  }
+
   /* Copy accumulated buffer to output */
   memcpy (map_out.data, filter->line_buffer, map_out.size);
 
-  gst_buffer_unmap (inbuf, &map_in);
   gst_buffer_unmap (outbuf, &map_out);
 
   /* Emit rollover signal if buffer wrapped around */
@@ -632,11 +678,44 @@ gst_linescan_transform (GstBaseTransform * trans, GstBuffer * inbuf,
     g_signal_emit (filter, gst_linescan_signals[SIGNAL_ROLLOVER], 0, outbuf);
   }
 
-  filter->frame_count++;
-
   GST_LOG_OBJECT (filter, "Processed frame %lu, buffer position: %d",
       (unsigned long) filter->frame_count, filter->buffer_position);
 
+  return GST_FLOW_OK;
+}
+
+static GstFlowReturn
+gst_linescan_prepare_output_buffer (GstBaseTransform * trans, GstBuffer * inbuf,
+    GstBuffer ** outbuf)
+{
+  GstLinescan *filter = GST_LINESCAN (trans);
+  gint roll_len;
+
+  /* Decide up front whether this frame's output buffer will be pushed
+   * downstream. We always accumulate one column per input frame (done in
+   * transform), but only emit the ~output-size-wide roll buffer every
+   * `emit-every` frames, plus always on the frame that completes a roll so the
+   * rollover signal / JPEG cadence is unchanged. On the frames we skip we hand
+   * BaseTransform an empty placeholder buffer so the big roll buffer is never
+   * even allocated, and transform() returns GST_BASE_TRANSFORM_FLOW_DROPPED. */
+  if (filter->emit_every <= 1 || !filter->video_info_valid) {
+    filter->will_emit = TRUE;
+  } else {
+    roll_len = (filter->direction == GST_LINESCAN_DIRECTION_HORIZONTAL)
+        ? GST_VIDEO_INFO_HEIGHT (&filter->video_info_out)
+        : GST_VIDEO_INFO_WIDTH (&filter->video_info_out);
+    /* buffer_position is pre-increment here; it wraps to 0 in transform once it
+     * reaches roll_len, so this frame completes the roll when +1 hits roll_len. */
+    filter->will_emit = (filter->buffer_position + 1 >= roll_len)
+        || (filter->frames_since_emit + 1 >= filter->emit_every);
+  }
+
+  if (filter->will_emit) {
+    return GST_BASE_TRANSFORM_CLASS (parent_class)->prepare_output_buffer (trans,
+        inbuf, outbuf);
+  }
+
+  *outbuf = gst_buffer_new ();
   return GST_FLOW_OK;
 }
 
@@ -650,7 +729,9 @@ gst_linescan_reset (GstLinescan * filter)
   
   filter->buffer_position = 0;
   filter->frame_count = 0;
-  
+  filter->frames_since_emit = 0;
+  filter->will_emit = TRUE;
+
   if (filter->video_info_valid) {
     gst_linescan_allocate_buffer (filter);
   }

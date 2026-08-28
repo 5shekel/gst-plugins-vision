@@ -19,6 +19,7 @@ The `linescan` plugin simulates a line scan camera by extracting a single row or
 | `direction` | enum | horizontal | Direction to extract line: `horizontal` (row) or `vertical` (column) |
 | `line-index` | int | -1 | Index of row/column to extract (-1 for middle of image) |
 | `output-size` | int | 800 | Number of lines to accumulate (width for horizontal mode, height for vertical mode) |
+| `emit-every` | int | 1 | Push the accumulated roll buffer downstream only every Nth input frame (a column is still accumulated every frame, and a rollover frame always emits). `1` = emit every frame. Raise it (≈ `framerate / consumer_fps`) at high framerates so the full-roll copy stays off the per-frame hot path — see [Performance Considerations](#performance-considerations). |
 
 ## Signals
 
@@ -192,7 +193,19 @@ camera ! linescan ! videoconvert ! jpegenc ! multipartmux ! tcpserversink
 
 - The plugin maintains an internal buffer equal to the full output image size
 - Memory usage = `output_width × output_height × bytes_per_pixel`
-- Processing overhead is minimal (single memcpy per frame)
+- Per input frame the element does two copies: a cheap one-column copy into the
+  internal roll buffer, and a copy of the **entire** roll buffer into a freshly
+  allocated output buffer that is pushed downstream. The second copy (plus the
+  alloc/free and any downstream `videoconvert` pass) is what limits throughput at
+  high framerates — e.g. a 3584×2016×3 roll is ~21.7 MB copied every frame.
+- **`emit-every=N`** decouples the push rate from the accumulation rate: the
+  one-column copy still happens every frame, but the big copy + `gst_pad_push`
+  only happen every Nth frame (and always on the frame that completes a roll, so
+  the `rollover` signal / downstream image cadence is unchanged). On the skipped
+  frames no output buffer is allocated at all. Set `emit-every ≈ framerate /
+  consumer_fps` (the consumer being a ~30 fps live preview; the rollover/JPEG
+  path is unaffected either way) to run the camera at full rate without the
+  per-frame roll copy on the hot path.
 - No frame buffering - processes each frame immediately
 
 ## Troubleshooting

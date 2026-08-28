@@ -63,7 +63,9 @@ enum
   PROP_CAMERA_ELEMENT,
   PROP_UPDATE_INTERVAL,
   PROP_BRIGHTNESS_SMOOTHING,
-  PROP_BRIGHTNESS_DEADBAND
+  PROP_BRIGHTNESS_DEADBAND,
+  PROP_AUTO_GAIN_BOOST,
+  PROP_BOOST_MIN_DWELL
 };
 
 #define DEFAULT_PROP_ENABLED TRUE
@@ -79,6 +81,8 @@ enum
 #define DEFAULT_PROP_UPDATE_INTERVAL 100  /* Update every 100ms (10 Hz) */
 #define DEFAULT_PROP_BRIGHTNESS_SMOOTHING 0.1  /* 10% new, 90% history - heavy smoothing for time-lapse */
 #define DEFAULT_PROP_BRIGHTNESS_DEADBAND 10.0  /* ±10 brightness units deadband zone */
+#define DEFAULT_PROP_AUTO_GAIN_BOOST FALSE     /* Off by default - opt in for unattended dawn/dusk runs */
+#define DEFAULT_PROP_BOOST_MIN_DWELL 120.0     /* Hold a gain-boost state >=2 min before toggling back */
 
 /* GStreamer boilerplate */
 #define gst_intervalometer_parent_class parent_class
@@ -141,6 +145,8 @@ static gdouble gst_intervalometer_calculate_brightness (GstIntervalometer * filt
     GstBuffer * buf);
 static void gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
     gdouble brightness);
+static gboolean gst_intervalometer_toggle_gain_boost (GstIntervalometer * filter,
+    gboolean enable);
 static void gst_intervalometer_write_log (GstIntervalometer * filter,
     gdouble brightness);
 static GstElement * gst_intervalometer_find_camera_element (GstIntervalometer * filter);
@@ -252,6 +258,24 @@ gst_intervalometer_class_init (GstIntervalometerClass * klass)
           0.0, 50.0, DEFAULT_PROP_BRIGHTNESS_DEADBAND,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_AUTO_GAIN_BOOST,
+      g_param_spec_boolean ("auto-gain-boost", "Auto Gain Boost",
+          "Use the camera's gain-boost as a third rung below exposure and gain: "
+          "when still too dark with exposure AND gain both maxed, enable gain-boost "
+          "(and drop gain to mid-range); when too bright with both floored, disable it. "
+          "Makes dawn/dusk fully autonomous - boost can never engage in daylight "
+          "because gain must be pinned at gain-max first. Requires an idsueyesrc "
+          "with a 'gain-boost' property",
+          DEFAULT_PROP_AUTO_GAIN_BOOST,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_BOOST_MIN_DWELL,
+      g_param_spec_double ("boost-min-dwell", "Gain Boost Minimum Dwell",
+          "Minimum seconds to hold a gain-boost state before it may toggle back. "
+          "Prevents chatter on a passing cloud at dusk. Only used when auto-gain-boost is enabled",
+          0.0, 3600.0, DEFAULT_PROP_BOOST_MIN_DWELL,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   /* Set element metadata */
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_intervalometer_sink_template));
@@ -289,6 +313,8 @@ gst_intervalometer_init (GstIntervalometer * filter)
   filter->update_interval = DEFAULT_PROP_UPDATE_INTERVAL;
   filter->brightness_smoothing = DEFAULT_PROP_BRIGHTNESS_SMOOTHING;
   filter->brightness_deadband = DEFAULT_PROP_BRIGHTNESS_DEADBAND;
+  filter->auto_gain_boost = DEFAULT_PROP_AUTO_GAIN_BOOST;
+  filter->boost_min_dwell = DEFAULT_PROP_BOOST_MIN_DWELL;
 
   /* Initialize internal state */
   filter->camera_src = NULL;
@@ -297,9 +323,11 @@ gst_intervalometer_init (GstIntervalometer * filter)
   filter->current_gain = DEFAULT_PROP_GAIN_MIN;
   filter->target_exposure = DEFAULT_PROP_EXPOSURE_MIN;
   filter->target_gain = DEFAULT_PROP_GAIN_MIN;
+  filter->boost_active = FALSE;
   filter->frame_count = 0;
   filter->start_time = GST_CLOCK_TIME_NONE;
   filter->last_update_time = GST_CLOCK_TIME_NONE;
+  filter->last_boost_toggle_time = GST_CLOCK_TIME_NONE;
   filter->log_fp = NULL;
   filter->log_header_written = FALSE;
   filter->video_info_valid = FALSE;
@@ -364,6 +392,12 @@ gst_intervalometer_set_property (GObject * object, guint prop_id,
     case PROP_BRIGHTNESS_DEADBAND:
       filter->brightness_deadband = g_value_get_double (value);
       break;
+    case PROP_AUTO_GAIN_BOOST:
+      filter->auto_gain_boost = g_value_get_boolean (value);
+      break;
+    case PROP_BOOST_MIN_DWELL:
+      filter->boost_min_dwell = g_value_get_double (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -415,6 +449,12 @@ gst_intervalometer_get_property (GObject * object, guint prop_id,
       break;
     case PROP_BRIGHTNESS_DEADBAND:
       g_value_set_double (value, filter->brightness_deadband);
+      break;
+    case PROP_AUTO_GAIN_BOOST:
+      g_value_set_boolean (value, filter->auto_gain_boost);
+      break;
+    case PROP_BOOST_MIN_DWELL:
+      g_value_set_double (value, filter->boost_min_dwell);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -629,6 +669,7 @@ gst_intervalometer_reset (GstIntervalometer * filter)
     filter->target_gain = filter->gain_min;
   }
   filter->frame_count = 0;
+  filter->last_boost_toggle_time = GST_CLOCK_TIME_NONE;
 }
 
 static gdouble
@@ -740,7 +781,7 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
   #define EXPOSURE_TOLERANCE 0.01  /* 0.01 ms tolerance */
   
   if (brightness > adjusted_target) {
-    /* Too bright - decrease exposure first, then gain */
+    /* Too bright - decrease exposure first, then gain, then gain-boost */
     if (filter->current_exposure > (filter->exposure_min + EXPOSURE_TOLERANCE)) {
       filter->target_exposure = filter->current_exposure -
           (exposure_range * 0.01 * ramp_multiplier);
@@ -748,9 +789,14 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
     } else if (filter->current_gain > filter->gain_min) {
       filter->target_gain = filter->current_gain - (gint) (ramp_multiplier);
       filter->target_gain = MAX (filter->target_gain, filter->gain_min);
+    } else if (filter->auto_gain_boost && filter->boost_active) {
+      /* Exposure and gain both floored and still too bright: drop gain-boost.
+       * Returns early on success - the recentre already pushed a new gain. */
+      if (gst_intervalometer_toggle_gain_boost (filter, FALSE))
+        return;
     }
   } else {
-    /* Too dark - increase exposure first up to max, then increase gain */
+    /* Too dark - increase exposure first up to max, then gain, then gain-boost */
     if (filter->current_exposure < (filter->exposure_max - EXPOSURE_TOLERANCE)) {
       filter->target_exposure = filter->current_exposure +
           (exposure_range * 0.01 * ramp_multiplier);
@@ -758,6 +804,10 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
     } else if (filter->current_gain < filter->gain_max) {
       filter->target_gain = filter->current_gain + (gint) (ramp_multiplier);
       filter->target_gain = MIN (filter->target_gain, filter->gain_max);
+    } else if (filter->auto_gain_boost && !filter->boost_active) {
+      /* Exposure and gain both maxed and still too dark: engage gain-boost. */
+      if (gst_intervalometer_toggle_gain_boost (filter, TRUE))
+        return;
     }
   }
   
@@ -795,6 +845,51 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
   }
 }
 
+/* Third rung of the brightness ladder (exposure -> gain -> gain-boost).
+ * Only reached when exposure and gain are both pinned at their limit and the
+ * frame is still on the wrong side of the deadband. Honours boost-min-dwell so a
+ * passing cloud at dusk cannot make it chatter, and recentres gain afterwards
+ * because gain-boost roughly doubles sensitivity. Returns TRUE if it toggled. */
+static gboolean
+gst_intervalometer_toggle_gain_boost (GstIntervalometer * filter, gboolean enable)
+{
+  GstClockTime now;
+  gint mid_gain;
+
+  if (!filter->camera_src) {
+    return FALSE;
+  }
+
+  now = gst_clock_get_time (gst_system_clock_obtain ());
+  if (filter->last_boost_toggle_time != GST_CLOCK_TIME_NONE) {
+    gdouble held = (gdouble) GST_CLOCK_DIFF (filter->last_boost_toggle_time, now)
+        / GST_SECOND;
+    if (held < filter->boost_min_dwell) {
+      GST_LOG_OBJECT (filter,
+          "gain-boost %s deferred: held %.0f s < boost-min-dwell %.0f s",
+          enable ? "on" : "off", held, filter->boost_min_dwell);
+      return FALSE;
+    }
+  }
+
+  g_object_set (filter->camera_src, "gain-boost", enable, NULL);
+  filter->boost_active = enable;
+  filter->last_boost_toggle_time = now;
+
+  /* Recentre gain so the ~2x sensitivity step doesn't jump brightness a full
+   * stop and there is headroom to ramp either direction next update. */
+  mid_gain = filter->gain_min + (filter->gain_max - filter->gain_min) / 2;
+  filter->current_gain = mid_gain;
+  filter->target_gain = mid_gain;
+  g_object_set (filter->camera_src, "gain", mid_gain, NULL);
+
+  GST_INFO_OBJECT (filter,
+      "Auto gain-boost %s (brightness rung 3); gain recentred to %d",
+      enable ? "ENABLED" : "DISABLED", mid_gain);
+
+  return TRUE;
+}
+
 static void
 gst_intervalometer_write_log (GstIntervalometer * filter, gdouble brightness)
 {
@@ -805,7 +900,7 @@ gst_intervalometer_write_log (GstIntervalometer * filter, gdouble brightness)
   /* Write CSV header on first frame */
   if (!filter->log_header_written) {
     fprintf (filter->log_fp,
-        "Frame,Time_s,Brightness,Exposure_ms,Gain,Target_Brightness\n");
+        "Frame,Time_s,Brightness,Exposure_ms,Gain,Target_Brightness,GainBoost\n");
     filter->log_header_written = TRUE;
   }
 
@@ -814,13 +909,14 @@ gst_intervalometer_write_log (GstIntervalometer * filter, gdouble brightness)
   gdouble elapsed = (now - filter->start_time) / 1000000000.0;
 
   /* Write data row */
-  fprintf (filter->log_fp, "%llu,%.3f,%.2f,%.3f,%d,%.2f\n",
+  fprintf (filter->log_fp, "%llu,%.3f,%.2f,%.3f,%d,%.2f,%d\n",
       (unsigned long long) filter->frame_count,
       elapsed,
       brightness,
       filter->current_exposure,
       filter->current_gain,
-      filter->target_brightness);
+      filter->target_brightness,
+      filter->boost_active ? 1 : 0);
 
   fflush (filter->log_fp);
 }
@@ -876,6 +972,18 @@ gst_intervalometer_query_camera_capabilities (GstIntervalometer * filter)
   /* Convert pointer back to HIDS (DWORD) */
   filter->hCam = (HIDS)(uintptr_t)hcam_ptr;
   GST_INFO_OBJECT (filter, "Got IDS uEye camera handle: 0x%x", filter->hCam);
+
+  /* Seed the tracked gain-boost state from the camera so auto-gain-boost picks
+   * up wherever the --mode seed left it instead of assuming "off". */
+  if (g_object_class_find_property (G_OBJECT_GET_CLASS (filter->camera_src),
+          "gain-boost")) {
+    g_object_get (filter->camera_src, "gain-boost", &filter->boost_active, NULL);
+    GST_INFO_OBJECT (filter, "Queried camera gain-boost: %s",
+        filter->boost_active ? "on" : "off");
+  } else if (filter->auto_gain_boost) {
+    GST_WARNING_OBJECT (filter, "auto-gain-boost enabled but camera element has "
+        "no 'gain-boost' property; auto-gain-boost will be inert");
+  }
 
   /* Query exposure limits using IDS uEye SDK if not manually set */
   if (filter->exposure_min == 0.0 || filter->exposure_max == 0.0) {

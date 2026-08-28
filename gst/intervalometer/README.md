@@ -61,6 +61,13 @@ make install
 | `gain-min` | int | 0-100 | 0 | Minimum gain value |
 | `gain-max` | int | 0-100 | 52 | Maximum gain value |
 
+### Gain Boost (third rung)
+
+| Property | Type | Range | Default | Description |
+|----------|------|-------|---------|-------------|
+| `auto-gain-boost` | boolean | - | FALSE | Toggle the camera's `gain-boost` as a rung below exposure and gain: enable it when exposure **and** gain are both maxed and still too dark; disable it when both are floored and too bright. On each toggle, gain is recentred to mid-range (boost ≈ 2× sensitivity). Boost can never engage in daylight because gain must be pinned at `gain-max` first. Needs an upstream `idsueyesrc` with a `gain-boost` property. |
+| `boost-min-dwell` | double | 0.0-3600.0 | 120.0 | Minimum seconds to hold a `gain-boost` state before it may toggle back (anti-chatter on a passing cloud at dusk). Only used when `auto-gain-boost` is enabled. |
+
 ### Ramping
 
 | Property | Type | Values | Default | Description |
@@ -80,6 +87,9 @@ make install
 | Property | Type | Range | Default | Description |
 |----------|------|-------|---------|-------------|
 | `log-file` | string | - | "" | Path to CSV log file (empty = disabled) |
+
+CSV columns: `Frame,Time_s,Brightness,Exposure_ms,Gain,Target_Brightness,GainBoost`
+(`GainBoost` is the controller's tracked 0/1 state, not a camera readback).
 
 ## Usage Examples
 

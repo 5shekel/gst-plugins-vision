@@ -76,6 +76,8 @@ struct _GstIntervalometer
   guint update_interval;         /* Update interval in milliseconds */
   gdouble brightness_smoothing;  /* Brightness smoothing factor (0-1, 0=no smoothing) */
   gdouble brightness_deadband;   /* Deadband zone to prevent oscillation (0=disabled) */
+  gboolean auto_gain_boost;      /* Toggle camera gain-boost as a third rung below exposure+gain */
+  gdouble boost_min_dwell;       /* Minimum seconds between gain-boost toggles (anti-chatter) */
 
   /* Internal state */
   GstElement *camera_src;        /* Reference to upstream camera element */
@@ -84,10 +86,12 @@ struct _GstIntervalometer
   gint current_gain;             /* Current gain setting */
   gdouble target_exposure;       /* Target exposure for ramping */
   gint target_gain;              /* Target gain for ramping */
-  
+  gboolean boost_active;         /* Current camera gain-boost state (queried, then tracked) */
+
   guint64 frame_count;           /* Number of frames processed */
   GstClockTime start_time;       /* Time when processing started */
   GstClockTime last_update_time; /* Time of last algorithm update */
+  GstClockTime last_boost_toggle_time; /* Time gain-boost was last toggled (dwell guard) */
   
   FILE *log_fp;                  /* Log file handle */
   gboolean log_header_written;   /* Whether CSV header has been written */

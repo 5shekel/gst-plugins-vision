@@ -225,7 +225,16 @@ Examples:
     parser.add_argument('--config', '-c', default=DEFAULT_CONFIG, metavar='INI',
                         help=f'Camera config .ini (default: {DEFAULT_CONFIG})')
     parser.add_argument('--mode', '-m', choices=['day', 'night'], default='day',
-                        help='Camera mode: day (0.02ms exposure, 0 gain) or night (5.25ms exposure, 65 gain) (default: day)')
+                        help='Camera mode: day (0.02ms exposure, 0 gain, gain-boost off) or '
+                             'night (5.25ms exposure, 65 gain, gain-boost on) (default: day). '
+                             'Only a seed - the intervalometer takes over within seconds.')
+    parser.add_argument('--auto-gain-boost', action=argparse.BooleanOptionalAction, default=True,
+                        help='Let the intervalometer toggle the camera gain-boost as a third '
+                             'rung (exposure -> gain -> gain-boost) so dawn/dusk needs no restart '
+                             '(default: on). With this on the --mode gain-boost bit is just a seed.')
+    parser.add_argument('--boost-min-dwell', type=float, default=120.0, metavar='SEC',
+                        help='Min seconds to hold a gain-boost state before it can toggle back '
+                             '(anti-chatter at dusk; default: 120)')
     parser.add_argument('--framerate', '-r', type=int, default=200, metavar='FPS',
                         help='Camera framerate in fps (default: 200)')
     parser.add_argument('--device-id', type=int, default=1, metavar='ID',
@@ -236,6 +245,12 @@ Examples:
                         help=f'Aspect ratio used to derive the roll width from the ROI (default: {DEFAULT_ASPECT})')
     parser.add_argument('--output-size', type=int, default=None, metavar='N',
                         help='Lines to accumulate before rollover = image width (default: derived from --aspect and the ROI)')
+    parser.add_argument('--emit-every', default='auto', metavar='N',
+                        help='Push the full roll buffer downstream only every Nth camera frame '
+                             '(one column is still accumulated per frame, and rollover always '
+                             'emits). Keeps the ~20 MB per-frame copy off the hot path at high '
+                             'framerates. "auto" (default) = round(framerate / --display-fps); '
+                             'use 1 to emit every frame.')
     parser.add_argument('--run-seconds', type=int, metavar='N',
                         help='Run for N seconds, then stop cleanly (useful for verification runs)')
     parser.add_argument('--preview', action=argparse.BooleanOptionalAction, default=True,
@@ -251,6 +266,16 @@ Examples:
                         help='Throttle the preview branch to this framerate (default: 30)')
 
     args = parser.parse_args()
+
+    # Resolve emit-every: "auto" tracks the preview cadence so downstream only
+    # sees ~--display-fps roll buffers/s regardless of camera framerate.
+    if str(args.emit_every).lower() == 'auto':
+        emit_every = max(1, round(args.framerate / max(1, args.display_fps)))
+    else:
+        try:
+            emit_every = max(1, int(args.emit_every))
+        except ValueError:
+            parser.error(f"--emit-every must be an integer or 'auto', got {args.emit_every!r}")
 
     # Resolve the roll width: explicit --output-size wins, otherwise derive it
     # from the ROI line length and the target aspect ratio.
@@ -385,8 +410,9 @@ Examples:
                 f"height={args.display_height},pixel-aspect-ratio=1/1"
             ))
         if preview_rate_caps is not None:
-            # linescan emits one frame per camera frame (200-1300 fps); throttle
-            # to a sane preview rate or the video sink drops "late" buffers.
+            # linescan emits a roll buffer every `emit-every` camera frames
+            # (~display-fps by default); throttle to a sane preview rate anyway
+            # so the video sink doesn't drop "late" buffers on cadence jitter.
             preview_rate_caps.set_property("caps", Gst.Caps.from_string(
                 f"video/x-raw,framerate={args.display_fps}/1"
             ))
@@ -430,9 +456,11 @@ Examples:
     if args.mode == 'day':
         exposure = 0.02
         gain = 0
+        gain_boost = False
     else:  # night
         exposure = 5.25
         gain = 65
+        gain_boost = True
 
     framerate = args.framerate
     device_id = args.device_id
@@ -440,13 +468,15 @@ Examples:
     source.set_property("exposure", exposure)
     source.set_property("framerate", framerate)
     source.set_property("gain", gain)
+    source.set_property("gain-boost", gain_boost)
     source.set_property("device-id", device_id)
     if args.num_buffers is not None:
         source.set_property("num-buffers", args.num_buffers)
 
     if args.debug:
         print(f"Camera mode: {args.mode}")
-        print(f"Camera settings: exposure={exposure}ms, framerate={framerate}fps, gain={gain}, device-id={device_id}")
+        print(f"Camera settings: exposure={exposure}ms, framerate={framerate}fps, gain={gain}, "
+              f"gain-boost={gain_boost}, device-id={device_id}")
 
     # Configure intervalometer
     intervalometer.set_property("enabled", True)
@@ -457,6 +487,8 @@ Examples:
     intervalometer.set_property("gain-max", 82)
     intervalometer.set_property("target-brightness", 80.0)
     intervalometer.set_property("log-file", "timelapse.csv")
+    intervalometer.set_property("auto-gain-boost", args.auto_gain_boost)
+    intervalometer.set_property("boost-min-dwell", args.boost_min_dwell)
 
     # Rotate 90 degrees. The two cameras are mounted with opposite handedness,
     # so the rotation direction depends on which one we're reading:
@@ -468,11 +500,12 @@ Examples:
     # Configure linescan: extract a vertical column per frame, stack horizontally
     linescan.set_property("direction", 1)  # vertical
     linescan.set_property("output-size", output_size)
+    linescan.set_property("emit-every", emit_every)
 
     if args.debug:
         print(f"Recording output directory: {output_dir}")
         print(f"Camera rotated 90 (videoflip method={flip_method}), then vertical linescan "
-              f"with output-size={output_size} (aspect {args.aspect})")
+              f"with output-size={output_size} (aspect {args.aspect}), emit-every={emit_every}")
         if args.preview:
             print(f"Preview branch: tee -> {args.preview_sink} "
                   f"({args.display_width}x{args.display_height} @ {args.display_fps}fps)")

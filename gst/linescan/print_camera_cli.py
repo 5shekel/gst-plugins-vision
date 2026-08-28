@@ -43,9 +43,14 @@ def build_command(args):
     if args.mode == "day":
         exposure = 0.02
         gain = 0
+        gain_boost = "false"
     else:
+        # Night is light-limited: gain-boost roughly doubles sensitivity and the
+        # scene is too dark without it at every framerate. roi-dusk.ini is shared
+        # with the day launch, so gate it here on --mode, not in the ini.
         exposure = 5.25
         gain = 65
+        gain_boost = "true"
 
     output_size = resolve_output_size(args)
 
@@ -82,6 +87,7 @@ def build_command(args):
         f"exposure={exposure}",
         f"framerate={args.framerate}",
         f"gain={gain}",
+        f"gain-boost={gain_boost}",
         "!",
         "intervalometer",
         "enabled=true",
