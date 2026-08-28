@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the UDP-based control protocol for dynamically controlling the IDS uEye camera exposure during runtime.
+This document describes the UDP-based control protocol for dynamically controlling the IDS uEye camera during runtime.
 
 ## Architecture
 
@@ -38,7 +38,7 @@ This document describes the UDP-based control protocol for dynamically controlli
 - **Bind Address**: 0.0.0.0 (accepts from any interface)
 - **Video Port**: 5000 (UDP) - existing video stream, unchanged
 - **Protocol**: UDP (connectionless, stateless)
-- **Encoding**: ASCII text
+- **Encoding**: ASCII/UTF-8 text
 - **Delimiter**: Newline (`\n`)
 
 ## Command Format
@@ -48,12 +48,12 @@ This document describes the UDP-based control protocol for dynamically controlli
 COMMAND [PARAMETERS]\n
 ```
 
-Commands are case-insensitive, but UPPERCASE is recommended for clarity.
+Commands are case-insensitive (the server uppercases the whole line before parsing).
 
 ### Size Limits
 - **Receive Buffer**: 8192 bytes (8KB)
 - **Maximum Command Length**: 1024 characters
-- Commands exceeding 1024 characters will be rejected with an error
+- Commands exceeding 1024 characters will be rejected with `ERROR INVALID_SYNTAX: Command too long (max 1024 chars)`
 
 ## Supported Commands
 
@@ -68,7 +68,7 @@ SET_EXPOSURE <value>
 
 **Parameters**:
 - `<value>`: Exposure time in milliseconds (float)
-  - Range: 1.0 to 1000.0 milliseconds
+  - Range: 0.015 to 30000.0 milliseconds
   - Examples: `16` (16ms), `1` (1ms), `100` (100ms)
 
 **Response**:
@@ -77,16 +77,16 @@ OK <actual_value>
 ```
 or
 ```
-ERROR <error_message>
+ERROR <error_code>: <error_message>
 ```
 
 **Examples**:
 ```
 Client: SET_EXPOSURE 16\n
-Server: OK 16\n
+Server: OK 16.0\n
 
-Client: SET_EXPOSURE 2000\n
-Server: ERROR Value out of range (1.0-1000.0)\n
+Client: SET_EXPOSURE 50000\n
+Server: ERROR OUT_OF_RANGE: Exposure must be 0.015-30000 milliseconds\n
 ```
 
 ### 2. GET_EXPOSURE
@@ -108,10 +108,32 @@ OK <current_value>
 **Example**:
 ```
 Client: GET_EXPOSURE\n
-Server: OK 16\n
+Server: OK 16.0\n
 ```
 
-### 3. SET_FRAMERATE
+### 3. GET_EXPOSURE_RANGE
+
+**Description**: Returns the theoretical exposure range from the API documentation. The real-time min/max/increment is sensor-dependent and is queried by the underlying C code (`gstidsueyesrc.c`) via `is_Exposure`/`IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE` before each `SET_EXPOSURE` call, so this command's `inc` field is intentionally not a concrete number.
+
+**Syntax**:
+```
+GET_EXPOSURE_RANGE
+```
+
+**Parameters**: None
+
+**Response**:
+```
+OK min=0.015 max=30000.0 inc=varies_by_sensor
+```
+
+**Example**:
+```
+Client: GET_EXPOSURE_RANGE\n
+Server: OK min=0.015 max=30000.0 inc=varies_by_sensor\n
+```
+
+### 4. SET_FRAMERATE
 
 **Description**: Sets the camera frame rate.
 
@@ -122,8 +144,8 @@ SET_FRAMERATE <value>
 
 **Parameters**:
 - `<value>`: Frame rate in Hz (float)
-  - Range: 1.0 to 500.0 fps
-  - Examples: `22`, `30.5`, `100`
+  - Range: 1.0 to 20200.0 fps
+  - Examples: `22`, `30.5`, `750`
 
 **Response**:
 ```
@@ -131,7 +153,7 @@ OK <actual_value>
 ```
 or
 ```
-ERROR <error_message>
+ERROR <error_code>: <error_message>
 ```
 
 **Example**:
@@ -140,7 +162,7 @@ Client: SET_FRAMERATE 30\n
 Server: OK 30.0\n
 ```
 
-### 4. GET_FRAMERATE
+### 5. GET_FRAMERATE
 
 **Description**: Retrieves the current frame rate.
 
@@ -162,7 +184,223 @@ Client: GET_FRAMERATE\n
 Server: OK 22.0\n
 ```
 
-### 5. STATUS
+### 6. SET_CAMERA_ID
+
+**Description**: Sets the camera ID property on the source element.
+
+**Syntax**:
+```
+SET_CAMERA_ID <value>
+```
+
+**Parameters**:
+- `<value>`: Integer, 0-254
+
+**Response**:
+```
+OK <actual_value>
+```
+or
+```
+ERROR <error_code>: <error_message>
+```
+
+**Example**:
+```
+Client: SET_CAMERA_ID 1\n
+Server: OK 1\n
+```
+
+### 7. GET_CAMERA_ID
+
+**Description**: Retrieves the current camera ID.
+
+**Syntax**:
+```
+GET_CAMERA_ID
+```
+
+**Response**:
+```
+OK <current_value>
+```
+
+### 8. SET_DEVICE_ID
+
+**Description**: Sets the device ID property on the source element.
+
+**Syntax**:
+```
+SET_DEVICE_ID <value>
+```
+
+**Parameters**:
+- `<value>`: Integer, 0-254
+
+**Response**:
+```
+OK <actual_value>
+```
+or
+```
+ERROR <error_code>: <error_message>
+```
+
+### 9. GET_DEVICE_ID
+
+**Description**: Retrieves the current device ID.
+
+**Syntax**:
+```
+GET_DEVICE_ID
+```
+
+**Response**:
+```
+OK <current_value>
+```
+
+### 10. SET_GAIN
+
+**Description**: Sets the camera gain.
+
+**Syntax**:
+```
+SET_GAIN <value>
+```
+
+**Parameters**:
+- `<value>`: Integer, 0-100 (0 for auto)
+
+**Response**:
+```
+OK <actual_value>
+```
+or
+```
+ERROR <error_code>: <error_message>
+```
+
+### 11. GET_GAIN
+
+**Description**: Retrieves the current gain.
+
+**Syntax**:
+```
+GET_GAIN
+```
+
+**Response**:
+```
+OK <current_value>
+```
+
+### 12. SET_AUTO_EXPOSURE
+
+**Description**: Enables or disables automatic exposure.
+
+**Syntax**:
+```
+SET_AUTO_EXPOSURE <0|1>
+```
+
+**Parameters**:
+- `<value>`: `0` (off) or `1` (on)
+
+**Response**:
+```
+OK <0|1>
+```
+or
+```
+ERROR <error_code>: <error_message>
+```
+
+### 13. GET_AUTO_EXPOSURE
+
+**Description**: Retrieves the current auto-exposure state.
+
+**Syntax**:
+```
+GET_AUTO_EXPOSURE
+```
+
+**Response**:
+```
+OK <0|1>
+```
+
+### 14. SET_AUTO_GAIN
+
+**Description**: Enables or disables automatic gain.
+
+**Syntax**:
+```
+SET_AUTO_GAIN <0|1>
+```
+
+**Parameters**:
+- `<value>`: `0` (off) or `1` (on)
+
+**Response**:
+```
+OK <0|1>
+```
+or
+```
+ERROR <error_code>: <error_message>
+```
+
+### 15. GET_AUTO_GAIN
+
+**Description**: Retrieves the current auto-gain state.
+
+**Syntax**:
+```
+GET_AUTO_GAIN
+```
+
+**Response**:
+```
+OK <0|1>
+```
+
+### 16. SET_GAIN_BOOST
+
+**Description**: Enables or disables gain boost.
+
+**Syntax**:
+```
+SET_GAIN_BOOST <0|1>
+```
+
+**Parameters**:
+- `<value>`: `0` (off) or `1` (on)
+
+**Response**:
+```
+OK <0|1>
+```
+or
+```
+ERROR <error_code>: <error_message>
+```
+
+### 17. GET_GAIN_BOOST
+
+**Description**: Retrieves the current gain-boost state.
+
+**Syntax**:
+```
+GET_GAIN_BOOST
+```
+
+**Response**:
+```
+OK <0|1>
+```
+
+### 18. STATUS
 
 **Description**: Get overall pipeline status and current settings.
 
@@ -175,13 +413,15 @@ STATUS
 
 **Response**:
 ```
-OK exposure=<value> framerate=<value> state=<PLAYING|PAUSED|NULL>
+OK exposure=<value> framerate=<value> camera_id=<value> device_id=<value> gain=<value> auto_exposure=<0|1> auto_gain=<0|1> gain_boost=<0|1> state=<PLAYING|PAUSED|NULL|READY>
 ```
+
+`state` is the uppercased GStreamer pipeline state nick (`Gst.State.value_nick`), or `UNKNOWN` if no pipeline was attached to the server.
 
 **Example**:
 ```
 Client: STATUS\n
-Server: OK exposure=16 framerate=22.0 state=PLAYING\n
+Server: OK exposure=16.0 framerate=22.0 camera_id=0 device_id=0 gain=0 auto_exposure=0 auto_gain=0 gain_boost=0 state=PLAYING\n
 ```
 
 ## Error Handling
@@ -196,9 +436,11 @@ ERROR <error_code>: <error_message>
 | Code | Description | Example |
 |------|-------------|---------|
 | `INVALID_COMMAND` | Unknown command | `ERROR INVALID_COMMAND: Unknown command 'FOO'` |
-| `INVALID_SYNTAX` | Malformed command | `ERROR INVALID_SYNTAX: Missing parameter` |
-| `OUT_OF_RANGE` | Value out of valid range | `ERROR OUT_OF_RANGE: Exposure must be 1.0-1000.0` |
-| `PIPELINE_ERROR` | Pipeline not running | `ERROR PIPELINE_ERROR: Pipeline not in PLAYING state` |
+| `INVALID_SYNTAX` | Malformed command, wrong argument count, or non-numeric value | `ERROR INVALID_SYNTAX: Usage: SET_EXPOSURE <value>` |
+| `OUT_OF_RANGE` | Value out of valid range | `ERROR OUT_OF_RANGE: Exposure must be 0.015-30000 milliseconds` |
+| `PROCESSING` | Unexpected exception while dispatching the command | `ERROR PROCESSING: <exception message>` |
+
+Individual property getters/setters that raise an unexpected exception (e.g. a GObject property error) return a bare `ERROR: <message>` without a code.
 
 ## Implementation Notes
 
@@ -208,7 +450,7 @@ ERROR <error_code>: <error_message>
 - The `src.set_property()` method can be safely called from the control thread
 
 ### Non-Blocking Operation
-- Control server uses non-blocking socket with timeout
+- Control server uses a non-blocking socket with a 0.5s timeout
 - Does not interfere with GStreamer pipeline operation
 - Minimal latency for command processing
 
@@ -239,6 +481,12 @@ print(send_command("GET_EXPOSURE"))
 
 # Set framerate to 30fps
 print(send_command("SET_FRAMERATE 30"))
+
+# Enable auto-exposure
+print(send_command("SET_AUTO_EXPOSURE 1"))
+
+# Get full status
+print(send_command("STATUS"))
 ```
 
 ### Command Line (netcat/nc)
@@ -286,7 +534,6 @@ uv run scripts/camera_control.py
 ## Future Enhancements
 
 Possible extensions to the protocol:
-- Add `SET_GAIN` / `GET_GAIN` commands
 - Add `SAVE_CONFIG` to save current settings to INI file
 - Add `RESET` to restore default settings
 - Support batch commands (multiple commands in one packet)
