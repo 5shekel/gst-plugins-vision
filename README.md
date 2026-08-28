@@ -82,8 +82,8 @@ Useful flags: `--sink glimagesink`, `--output-size`, `--aspect`,
 ### Recording — [`launch_with_signal.py`](gst/linescan/launch_with_signal.py)
 
 Builds the pipeline in Python, connects the `rollover` signal, and writes one
-PNG per completed roll to `results/<date>/<funny-name>/linescan_capture_NNNNNN.png`
-(override with `--output-dir`). The display branch is a `fakesink`; the PNGs are
+JPEG per completed roll to `results/<date>/<funny-name>/linescan_capture_NNNNNN.jpg`
+(override with `--output-dir`). The display branch is a `fakesink`; the JPEGs are
 the output.
 
 ```pwsh
