@@ -70,6 +70,7 @@ def build_command(args):
     command = [
         "gst-launch-1.0",
         "idsueyesrc",
+        "name=source",
         f"device-id={args.device_id}",
         f"config-file={shlex.quote(args.config)}",
         f"exposure={exposure}",

@@ -1,123 +1,130 @@
 # gst-plugins-vision
 
-GStreamer plugins for IDS uEye cameras with frame analysis capabilities.
-
-#### TODO
+Custom GStreamer elements for an IDS uEye line-scan camera rig, plus the
+Python/PowerShell tooling around it. The rig points a short, wide sensor ROI at
+a scene and accumulates one column per frame into a slowly scrolling "roll"
+image (think photo-finish / strip photography).
 
 ## Supported Elements
 
+Inspect any of these with `gst-inspect-1.0 <name>` for the full property list.
+
 ### Image Acquisition
-- **idsueyesrc**: Video source for [IDS uEye cameras][1] (GigE Vision, USB 2/3, USB3 Vision)
+- **idsueyesrc** (`sys/idsueye/`): video source for [IDS uEye cameras][1]
+  (GigE Vision, USB 2/3, USB3 Vision). Always pass `config-file=` pointing at a
+  uEye `.ini` (see [`ini/`](ini/)); without it the element tries to load presets
+  from camera EEPROM and fails with a misleading error. Key properties:
+  `device-id`, `config-file`, `exposure` (ms), `framerate`, `gain`, `gain-boost`.
 
 ### Video Analysis
-- **rollingsum**: Drops frames based on rolling mean analysis of a single column. Analyzes pixel column deviation from rolling baseline to detect anomalies or changes in the scene.
+- **linescan** (`gst/linescan/`): extracts one row (`direction=horizontal`) or
+  column (`direction=vertical`) per input frame and stacks them into a scrolling
+  line-scan image. `line-index=-1` picks the middle. `output-size` is the number
+  of lines accumulated before the buffer wraps; on each wrap it emits a
+  `rollover` signal carrying the completed image. See
+  [gst/linescan/README.md](gst/linescan/README.md).
+- **intervalometer** (`gst/intervalometer/`): brightness-driven auto-exposure
+  for `idsueyesrc`. Sits directly downstream of the camera, reaches back to it
+  by element name (`camera-element=`), and ramps `exposure`/`gain` to hold
+  `target-brightness`. Logs every adjustment to a CSV.
+- **rollingsum**: *deprecated* frame-dropping filter (rolling-mean deviation of
+  a single column). Source removed; kept here only for reference.
 
+Other plugin dirs exist for narrower jobs (`appendsignals`, `bayerutils`,
+`extractcolor`, `klv`, `misb`, `select`, `sensorfx`, `videoadjust`) —
+`gst-inspect-1.0` them as needed.
 
-## Usage Examples
+## Line-scan capture
 
-### Basic capture from IDS uEye camera
-```powershell
-gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! queue ! autovideosink
+The two scripts under [`gst/linescan/`](gst/linescan/) are the primary workflow.
+Both build the same acquisition front end and differ only in what they do with
+the linescan output.
+
+```
+idsueyesrc → intervalometer → videoflip method=3 (CCW 90°) → queue → linescan direction=vertical
 ```
 
-## Network Streaming
+Geometry, using [`ini/roi-dusk.ini`](ini/roi-dusk.ini) (sensor ROI 2016 × 20,
+W × H):
 
-### Quick Start - Single Line Transmission (2456x1)
+| stage | result |
+|-------|--------|
+| `videoflip method=3` (CCW 90°) | 20 × 2016 |
+| `linescan direction=vertical`  | `output-size` × 2016 — one column per frame, roll grows left→right |
 
-#### Send Single Line via UDP
-Extract and transmit one line from camera (daytime, 200fps):
+`output-size` (the roll width) defaults to whatever makes the raw image 16:9 for
+its height: `2016 × 16/9 = 3584`. Keep the raw roll wide and downscale it at
+view time. Override with `--output-size N`; change the target ratio with
+`--aspect W:H`. Both scripts read the ROI width straight from the `.ini`, so
+pointing `--config` at a different ROI recomputes the geometry.
+
+Camera settings are shared: `--mode day` → 0.02 ms exposure, gain 0;
+`--mode night` → 5.25 ms exposure, gain 65. Defaults: `--framerate 200`,
+`--device-id 1`. The intervalometer runs enabled with `target-brightness 80`,
+`gain-max 82`, `ramp-rate slow`, logging to `timelapse.csv`.
+
+### Live preview — [`print_camera_cli.py`](gst/linescan/print_camera_cli.py)
+
+Prints (does not run) a `gst-launch-1.0` one-liner that shows the scrolling roll
+in a window. The tail of the pipeline downscales to `--display-width` ×
+`--display-height` and throttles to `--display-fps` (linescan emits one frame
+per *camera* frame, i.e. 200–1300 fps, which a video sink would otherwise drop
+as "late"), then feeds a leaky queue into `autovideosink sync=false`.
+
 ```pwsh
-gst-launch-1.0 idsueyesrc config-file=ini/2456x4pix-500top-cw-extragain.ini exposure=10 framerate=750 ! `
-videocrop bottom=3 ! `
-queue ! `
-udpsink host=10.81.2.183 port=5000
+# copy-paste the printed command, or on PowerShell:
+uv run gst/linescan/print_camera_cli.py --mode day | Invoke-Expression
 ```
-now moving to automatic exposure (see [gstintervalometer](gst\intervalometer\gstintervalometer.c))
-```pwsh
-uv run .\scripts\launch-ids.py `
-    --config .\ini\2456x4pix-500top-cw-extragain.ini `
-    --device-id 1 `
-    --framerate 750 `
-    --gain 52 `
-    --gain-boost `
-    --exposure 10 `
-    --host 10.81.2.183 
-```
+
+Useful flags: `--sink glimagesink`, `--output-size`, `--aspect`,
+`--display-width/-height/-fps`, `--config`.
+
+### Recording — [`launch_with_signal.py`](gst/linescan/launch_with_signal.py)
+
+Builds the pipeline in Python, connects the `rollover` signal, and writes one
+PNG per completed roll to `results/<date>/<funny-name>/linescan_capture_NNNNNN.png`
+(override with `--output-dir`). The display branch is a `fakesink`; the PNGs are
+the output.
 
 ```pwsh
- gst-launch-1.0 idsueyesrc config-file=ini/2456x4pix-500top-cw-extragain.ini exposure=0.85 framerate=750 gain=0 name=cam device-id=1 ! `
-    intervalometer enabled=true camera-element=cam `
-        ramp-rate=vslow `
-        update-interval=1000 `
-        gain=52 `
-        log-file=timelapse.csv ! `
-        videocrop bottom=3 ! queue ! udpsink host=10.81.2.183 port=5000
+uv run gst/linescan/launch_with_signal.py                 # day mode, defaults
+uv run gst/linescan/launch_with_signal.py --mode night
+uv run gst/linescan/launch_with_signal.py --config ini/roi-night.ini
+uv run gst/linescan/launch_with_signal.py --run-seconds 20 --debug   # timed check
 ```
 
-```pwsh
-$env:GST_DEBUG="linescan:5";
+Stop with Ctrl+C. `--num-buffers N` / `--run-seconds N` give bounded verification
+runs; `--gst-debug` raises the GStreamer log level.
 
- gst-launch-1.0 idsueyesrc config-file=ini/roi-night.ini `
-    exposure=5.25 framerate=200 gain=42 name=cam device-id=2 ! `
-    intervalometer enabled=true camera-element=cam `
-    ramp-rate=vslow `
-    update-interval=1000 `
-    gain-max=52 `
-    log-file=timelapse.csv ! `
-    videocrop bottom=3 ! `
-    queue ! `
-    linescan direction=vertical output-size=1900 ! `
-    videoconvert ! autovideosink
-```
+Prerequisites for both: build the plugins (`.\build.ps1`), run from the
+workspace root so `--config` resolves, and have `GSTREAMER_1_0_ROOT_MSVC_X86_64`
+set (the script adds the GI typelibs and DLL bin dir from it).
 
-#### Receive and Display
-```pwsh
-uv run .\scripts\recv_raw_rolling.py --display-fps 60
-```
+### Startup automation
 
-**What's happening:**
-- Camera captures 2456x4 pixels at row 500 of the sensor
-- `videocrop bottom=3` extracts only the top line (2456x1)
-- 7368 bytes transmitted per frame (2456 × 1 × 3 BGR channels)
-- Receiver displays as a rolling vertical scan
+[`launch_linescan.ps1`](launch_linescan.ps1) is a thin wrapper
+(`.\launch_linescan.ps1 day|night [output-dir]`).
+[`startup_linescan.ps1`](startup_linescan.ps1) +
+[`register_startup.ps1`](register_startup.ps1) register a Task Scheduler job that
+launches the recorder on login, picking day/night mode from the clock. See
+[STARTUP.md](STARTUP.md).
 
-See [network_guide.md](network_guide.md) for detailed configuration options, nighttime settings, and recording.
+## Network streaming
 
-### Demo/Test Data Streaming
-
-#### Sender (crop to first column, send raw over UDP)
-```pwsh
-gst-launch-1.0 -v `
-    videotestsrc pattern=smpte ! `
-    videocrop left=0 right=639 top=0 bottom=0 ! `
-    video/x-raw,format=RGB,width=1,height=640,framerate=30/1 ! `
-    udpsink host=127.0.0.1 port=5000
-```
-
-#### GStreamer Receiver (raw UDP → display)
-```pwsh
-gst-launch-1.0 -v `
-    udpsrc port=5000 caps="video/x-raw,format=RGB,width=1,height=640,framerate=30/1" ! `
-    videoconvert ! `
-    autovideosink
-```
-moving to 
-```pwsh
-uv run .\scripts\launch-ids.py --config .\ini\2456x4pix-500top-cw-extragain.ini --device-id 1 --framerate 750 --exposure 10 --host 10.81.2.183 --gain 52 
-```
-
-## WIP - Frame filtering based on column analysis
-Drop frames when column mean deviates from rolling baseline by more than 0.5:
-```powershell
-gst-launch-1.0 idsueyesrc config-file=ini/whole-presacler64_autoexp-binningx2.ini exposure=0.5 ! videoconvert ! video/x-raw,format=GRAY8 ! rollingsum window-size=1000 column-index=1 threshold=0.5 ! queue ! autovideosink
-```
-
-**Note:** The `rollingsum` element analyzes a single column of pixels and drops frames when the column mean deviates from the rolling mean baseline by more than the threshold. Use `videoconvert` to ensure proper format negotiation.
+A separate path (`scripts/launch-ids.py`) crops the camera to a single line and
+sends raw `video/x-raw` over `udpsink`, with a plain-text UDP control protocol on
+port 5001 for live parameter changes. This needs a genuine one-row-per-frame ROI
+such as [`ini/2456x4pix-500top-cw-extragain.ini`](ini/2456x4pix-500top-cw-extragain.ini)
+(`videocrop bottom=3` → 2456 × 1); a UDP datagram cannot exceed 65507 bytes, so a
+tall ROI will not fit. See [network_guide.md](network_guide.md),
+[scripts/UDP_STREAM_TESTING.md](scripts/UDP_STREAM_TESTING.md), and
+[scripts/UDP_CONTROL_PROTOCOL.md](scripts/UDP_CONTROL_PROTOCOL.md).
 
 ## Dependencies
 
-- GStreamer 1.2.x or newer
+- GStreamer 1.2.x or newer (dev box runs 1.26.8 MSVC x86_64)
 - IDS uEye SDK (for camera support)
+- [`uv`](https://docs.astral.sh/uv/) for the Python scripts
 
 ## Building on Linux/ARM64
 
@@ -187,7 +194,7 @@ The easiest way to build is using the provided PowerShell script:
 # Set the plugin installation path
 $env:GST_PLUGIN_PATH = "C:\path\to\your\plugins"
 
-# Build all plugins (IDS uEye + rollingsum) and auto-copy to GST_PLUGIN_PATH
+# Build all plugins and auto-copy to GST_PLUGIN_PATH
 .\build.ps1
 ```
 
@@ -216,30 +223,27 @@ cmake --build . --config Release
 
 ### Installation
 
-The `build.ps1` script automatically copies plugins to `$env:GST_PLUGIN_PATH` if set. Alternatively:
-
-1. Set `GST_PLUGIN_PATH` environment variable to point to your plugin directory
-2. Copy the built DLLs manually:
-   - `build\sys\idsueye\Release\libgstidsueye.dll`
-   - `build\gst\rollingsum\Release\libgstrollingsum.dll`
+The `build.ps1` script automatically copies plugins to `$env:GST_PLUGIN_PATH` if
+set (on this dev box that is `C:\dev\gst-plugins-vision\gst_plugs`). Otherwise
+set `GST_PLUGIN_PATH` to your plugin directory and copy the built DLLs there.
 
 ### Verify Installation
 
 ```powershell
 gst-inspect-1.0 idsueyesrc
-gst-inspect-1.0 rollingsum
+gst-inspect-1.0 linescan
+gst-inspect-1.0 intervalometer
 ```
-
-## Documentation
-
-- [Rolling Sum Filter Design](DESIGN_ROLLINGSUM.md)
 
 ## Debugging
-add `$env:GST_DEBUG_DUMP_DOT_DIR='.'` 
 
-![](dot_pause-play.svg)
+Set a per-element log level, e.g. `$env:GST_DEBUG="linescan:5"`.
 
-to get dotfile, and view using https://dreampuf.github.io/GraphvizOnline/, or
+For a pipeline graph, set `$env:GST_DEBUG_DUMP_DOT_DIR='.'`, run the pipeline,
+then render a `.dot` dump with [GraphvizOnline](https://dreampuf.github.io/GraphvizOnline/)
+or:
 ```pwsh
-dot -Tsvg C:\dev\gst-plugins-vision\0.00.02.922833100-gst-launch.PAUSED_PLAYING.dot -o same.svg
+dot -Tsvg 0.00.02.922833100-gst-launch.PAUSED_PLAYING.dot -o same.svg
 ```
+
+[1]: https://en.ids-imaging.com
