@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
+# dependencies = ["Pillow"]
 # ///
 #
-# Linescan capture -> PNG on rollover
+# Linescan capture -> JPEG on rollover
 #
 # Builds a GStreamer pipeline from an IDS uEye line-scan camera:
 #
@@ -11,11 +12,11 @@
 #
 # linescan accumulates one column per camera frame into an `output-size`-wide
 # image. On every buffer rollover the "rollover" signal fires and on_rollover()
-# writes the accumulated image out as a PNG.
+# writes the accumulated image out as a JPEG.
 #
 # Geometry (ini/roi-dusk.ini, ROI 2016 x 20):
-#   videoflip method=3 (CCW 90)   -> 20 x 2016
-#   linescan direction=1          -> <output-size> x 2016   (roll fills left..right)
+#   videoflip method=1/3 (90 CW/CCW, per device-id)  -> 20 x 2016
+#   linescan direction=1                             -> <output-size> x 2016   (roll fills left..right)
 #
 # output-size (the roll width) defaults to whatever makes the raw image match
 # --aspect (16:9) given its height: 2016 * 16/9 = 3584. Keep the raw image wide
@@ -24,7 +25,7 @@
 # No videocrop: linescan already selects a single line (line-index, default =
 # middle column), so trimming rows off the ROI first is redundant.
 #
-# Output: results/<date>/<funny-name>/linescan_capture_NNNNNN.png
+# Output: results/<date>/<funny-name>/linescan_capture_NNNNNN.jpg
 #         (override with --output-dir)
 #
 # Usage:
@@ -74,8 +75,8 @@ import argparse
 import configparser
 from datetime import datetime
 import random
-import struct
-import zlib
+
+from PIL import Image
 
 
 frame_counter = 0
@@ -124,8 +125,11 @@ def _derive_output_size(line_length, aspect):
     return round(line_length * aw / ah)
 
 
+JPEG_QUALITY = 90
+
+
 def on_rollover(linescan, buffer):
-    """Called when the linescan buffer wraps around - write it out as a PNG."""
+    """Called when the linescan buffer wraps around - write it out as a JPEG."""
     global frame_counter
     caps = linescan.get_static_pad("src").get_current_caps()
     if not caps or caps.is_empty():
@@ -148,52 +152,23 @@ def on_rollover(linescan, buffer):
 
             stride = info.stride[0]
             row_bytes = width * 3
-            image_rows = []
+            raw = bytearray(row_bytes * height)
             for y in range(height):
                 start = y * stride
-                row = map_info.data[start:start + row_bytes]
-                image_rows.append(bytes(row))
+                raw[y * row_bytes:(y + 1) * row_bytes] = \
+                    map_info.data[start:start + row_bytes]
 
-            filename = os.path.join(output_dir, f"linescan_capture_{frame_counter:06d}.png")
-            _write_png_bgr(filename, width, height, image_rows)
+            image = Image.frombuffer(
+                "RGB", (width, height), bytes(raw), "raw", "BGR", 0, 1
+            )
+            filename = os.path.join(output_dir, f"linescan_capture_{frame_counter:06d}.jpg")
+            image.save(filename, "JPEG", quality=JPEG_QUALITY)
             print(f"Wrote frame {frame_counter}: {filename}")
             frame_counter += 1
         finally:
             buffer.unmap(map_info)
     except Exception as e:
         print(f"Failed to save rollover frame: {e}")
-
-
-def _write_png_chunk(handle, chunk_type, data):
-    handle.write(struct.pack(">I", len(data)))
-    handle.write(chunk_type)
-    handle.write(data)
-    crc = zlib.crc32(chunk_type)
-    crc = zlib.crc32(data, crc)
-    handle.write(struct.pack(">I", crc & 0xFFFFFFFF))
-
-
-def _write_png_bgr(path, width, height, rows):
-    png_signature = b"\x89PNG\r\n\x1a\n"
-    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-
-    raw = bytearray()
-    for row in rows:
-        rgb_row = bytearray(len(row))
-        for i in range(0, len(row), 3):
-            rgb_row[i] = row[i + 2]
-            rgb_row[i + 1] = row[i + 1]
-            rgb_row[i + 2] = row[i]
-        raw.append(0)
-        raw.extend(rgb_row)
-
-    compressed = zlib.compress(bytes(raw), level=6)
-
-    with open(path, "wb") as handle:
-        handle.write(png_signature)
-        _write_png_chunk(handle, b"IHDR", ihdr)
-        _write_png_chunk(handle, b"IDAT", compressed)
-        _write_png_chunk(handle, b"IEND", b"")
 
 
 def on_message(bus, message):
@@ -217,7 +192,7 @@ def main():
 
     # Parse command line arguments
     parser = argparse.ArgumentParser(
-        description='Linescan pipeline with direct PNG recording on rollover',
+        description='Linescan pipeline with direct JPEG recording on rollover',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
@@ -414,9 +389,9 @@ Examples:
 
     # Rotate 90 degrees. The two cameras are mounted with opposite handedness,
     # so the rotation direction depends on which one we're reading:
-    #   device-id 1 -> method=3 (CCW 90)
-    #   device-id 2 -> method=1 (CW 90)
-    flip_method = 1 if device_id == 2 else 3
+    #   device-id 1 -> method=1 (CW 90)
+    #   device-id 2 -> method=3 (CCW 90)
+    flip_method = 3 if device_id == 2 else 1
     videoflip.set_property("method", flip_method)
 
     # Configure linescan: extract a vertical column per frame, stack horizontally
@@ -484,7 +459,7 @@ Examples:
         print(f"Pipeline state: {pipeline.get_state(0)[1].value_nick}")
 
     # Start pipeline
-    print(f"PNG frames will be written to: {output_dir}/")
+    print(f"JPEG frames will be written to: {output_dir}/")
     print("Press Ctrl+C to stop\n")
 
     ret = pipeline.set_state(Gst.State.PLAYING)

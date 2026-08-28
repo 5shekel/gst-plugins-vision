@@ -49,8 +49,14 @@ def build_command(args):
 
     output_size = resolve_output_size(args)
 
+    # The two cameras are mounted with opposite handedness, so the 90-degree
+    # rotation direction depends on which one we're reading:
+    #   device-id 1 -> method=1 (CW 90)
+    #   device-id 2 -> method=3 (CCW 90)
+    flip_method = 3 if args.device_id == 2 else 1
+
     # Geometry (roi-dusk.ini): camera ROI is 2016 x 20 (W x H).
-    #   videoflip method=3 (CCW 90) -> 20 x 2016
+    #   videoflip method=1/3 (90 CW/CCW, per device-id) -> 20 x 2016
     #   linescan direction=1        -> picks one column, stacks horizontally
     #                              -> output-size x 2016  (roll grows left..right)
     #   videoscale                  -> display-width x display-height (fit the screen)
@@ -88,7 +94,7 @@ def build_command(args):
         "log-file=timelapse.csv",
         "!",
         "videoflip",
-        "method=3",
+        f"method={flip_method}",
         "!",
         "queue",
         "!",
