@@ -80,6 +80,11 @@ struct _GstIntervalometer
   gboolean auto_gain_boost;      /* Toggle camera gain-boost as a third rung below exposure+gain */
   gdouble boost_min_dwell;       /* Minimum seconds between gain-boost toggles (anti-chatter) */
   gint gain_max_boost;           /* Gain ceiling while gain-boost is active (0 = use gain_max) */
+  gdouble framerate_min;         /* Adaptive-fps lower bound (0 = fps control disabled) */
+  gdouble framerate_max;         /* Adaptive-fps upper bound / daytime ceiling */
+  gdouble framerate_max_boost;   /* Fps ceiling while gain-boost active = night (0 = use framerate_max) */
+  gdouble framerate_step;        /* Multiplicative step per fps adjustment (x / div) */
+  gdouble framerate_min_dwell;   /* Minimum seconds between fps changes (anti-chatter) */
 
   /* Internal state */
   GstElement *camera_src;        /* Reference to upstream camera element */
@@ -89,6 +94,8 @@ struct _GstIntervalometer
   gdouble target_exposure;       /* Target exposure for ramping */
   gint target_gain;              /* Target gain for ramping */
   gboolean boost_active;         /* Current camera gain-boost state (queried, then tracked) */
+  gdouble current_framerate;     /* Current camera framerate (queried, then tracked) */
+  GstClockTime last_framerate_change_time; /* Time fps was last changed (dwell guard) */
 
   guint64 frame_count;           /* Number of frames processed */
   GstClockTime start_time;       /* Time when processing started */

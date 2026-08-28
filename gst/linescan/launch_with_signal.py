@@ -43,6 +43,13 @@
 #   uv run gst/linescan/launch_with_signal.py --run-seconds 20 --debug
 #   uv run gst/linescan/launch_with_signal.py --gst-debug
 #
+# Framerate is adaptive by default: --framerate is only a seed and the
+# intervalometer varies the camera rate as its 4th brightness rung within
+# [--framerate-min, --framerate-max] (with a lower --framerate-max-boost ceiling
+# at night), so one launch runs the line as fast as the light allows across
+# dawn/dusk with no restart. --no-adaptive-framerate pins it to a fixed rate.
+# See gst/linescan/NIGHT_FPS_TUNING.md.
+#
 # Prerequisites:
 #   - Build the custom plugins: .\build.ps1  (idsueyesrc, intervalometer, linescan)
 #   - Set up the environment: . .\scripts\setup_gstreamer_env.ps1
@@ -250,8 +257,32 @@ Examples:
                              'on (0 = disabled, use --gain-max in both states). Lets gain still '
                              'climb high at dusk to delay boost, then stay capped once boosted so '
                              'boost x gain does not blow up the noise. Try ~40.')
-    parser.add_argument('--framerate', '-r', type=int, default=200, metavar='FPS',
-                        help='Camera framerate in fps (default: 200)')
+    parser.add_argument('--framerate', '-r', type=int, default=None, metavar='FPS',
+                        help='Camera framerate in fps. With --adaptive-framerate (default) this '
+                             'is only the startup SEED - the intervalometer then drives fps as '
+                             'its 4th rung within [--framerate-min, --framerate-max]. If omitted, '
+                             'the seed is --framerate-max (day) or --framerate-max-boost (night). '
+                             'With --no-adaptive-framerate it is the fixed rate (default: 200).')
+    parser.add_argument('--adaptive-framerate', action=argparse.BooleanOptionalAction, default=True,
+                        help='Let the intervalometer vary the camera framerate as a 4th rung '
+                             '(exposure -> gain -> gain-boost -> framerate): lower fps when still '
+                             'dark with the first three pinned (buys a longer 1/fps exposure cap), '
+                             'raise fps when there is surplus light. Keeps the line rate as high '
+                             'as the light allows around the clock (default: on).')
+    parser.add_argument('--framerate-min', type=float, default=150.0, metavar='FPS',
+                        help='Adaptive-fps floor (default: 150). The darkest-night line rate.')
+    parser.add_argument('--framerate-max', type=float, default=800.0, metavar='FPS',
+                        help='Adaptive-fps ceiling / full-sun daytime target (default: 800). '
+                             'Also sizes --emit-every auto.')
+    parser.add_argument('--framerate-max-boost', type=float, default=400.0, metavar='FPS',
+                        help='Separate, lower fps ceiling that applies only while gain-boost is on '
+                             '(= night); fps is snapped down to it when boost engages at dusk '
+                             '(0 = use --framerate-max in both states; default: 400).')
+    parser.add_argument('--framerate-step', type=float, default=1.15, metavar='MULT',
+                        help='Multiplicative fps step per rung-4 adjustment (default: 1.15 = +/-15%%).')
+    parser.add_argument('--framerate-min-dwell', type=float, default=20.0, metavar='SEC',
+                        help='Min seconds to hold an fps before rung 4 changes it again '
+                             '(anti-chatter at dawn/dusk; default: 20).')
     parser.add_argument('--device-id', type=int, default=1, metavar='ID',
                         help='IDS uEye device id (default: 1)')
     parser.add_argument('--num-buffers', type=int, metavar='N',
@@ -264,7 +295,8 @@ Examples:
                         help='Push the full roll buffer downstream only every Nth camera frame '
                              '(one column is still accumulated per frame, and rollover always '
                              'emits). Keeps the ~20 MB per-frame copy off the hot path at high '
-                             'framerates. "auto" (default) = round(framerate / --display-fps); '
+                             'framerates. "auto" (default) = round(peak-framerate / --display-fps), '
+                             'where peak-framerate is --framerate-max when adaptive fps is on; '
                              'use 1 to emit every frame.')
     parser.add_argument('--run-seconds', type=int, metavar='N',
                         help='Run for N seconds, then stop cleanly (useful for verification runs)')
@@ -291,10 +323,35 @@ Examples:
         parser.error(f"--gain-max-boost ({args.gain_max_boost}) must be below --gain-max "
                      f"({args.gain_max}) to have any effect")
 
+    # Resolve the framerate: with adaptive control on, --framerate is only a seed
+    # and the intervalometer owns the rate within [min, max]; otherwise it is the
+    # fixed rate. fps_ceiling is the highest rate the run can reach and is what
+    # --emit-every auto must be sized for.
+    adaptive_fps = args.adaptive_framerate
+    if adaptive_fps:
+        if args.framerate_min >= args.framerate_max:
+            parser.error(f"--framerate-min ({args.framerate_min:g}) must be < "
+                         f"--framerate-max ({args.framerate_max:g})")
+        if args.framerate_max_boost and not (
+                args.framerate_min < args.framerate_max_boost <= args.framerate_max):
+            parser.error(f"--framerate-max-boost ({args.framerate_max_boost:g}) must be 0 or in "
+                         f"(--framerate-min, --framerate-max] = "
+                         f"({args.framerate_min:g}, {args.framerate_max:g}]")
+        fps_ceiling = args.framerate_max
+        if args.framerate is not None:
+            seed_framerate = args.framerate
+        elif args.mode == 'night':
+            seed_framerate = int(args.framerate_max_boost or args.framerate_max)
+        else:
+            seed_framerate = int(args.framerate_max)
+    else:
+        seed_framerate = args.framerate if args.framerate is not None else 200
+        fps_ceiling = seed_framerate
+
     # Resolve emit-every: "auto" tracks the preview cadence so downstream only
-    # sees ~--display-fps roll buffers/s regardless of camera framerate.
+    # sees ~--display-fps roll buffers/s at the run's peak framerate.
     if str(args.emit_every).lower() == 'auto':
-        emit_every = max(1, round(args.framerate / max(1, args.display_fps)))
+        emit_every = max(1, round(fps_ceiling / max(1, args.display_fps)))
     else:
         try:
             emit_every = max(1, int(args.emit_every))
@@ -502,7 +559,7 @@ Examples:
     if gain_seed_clamped:
         gain = seed_ceiling
 
-    framerate = args.framerate
+    framerate = seed_framerate
     device_id = args.device_id
 
     source.set_property("exposure", exposure)
@@ -541,6 +598,17 @@ Examples:
     intervalometer.set_property("boost-min-dwell", args.boost_min_dwell)
     if args.gain_max_boost > 0:
         intervalometer.set_property("gain-max-boost", args.gain_max_boost)
+
+    # Adaptive framerate = 4th rung (exposure -> gain -> gain-boost -> framerate).
+    # Only engages once the first three are pinned, so it never perturbs the
+    # normal diurnal ramp until that ramp hits a rail. See NIGHT_FPS_TUNING.md.
+    if adaptive_fps:
+        intervalometer.set_property("framerate-min", float(args.framerate_min))
+        intervalometer.set_property("framerate-max", float(args.framerate_max))
+        if args.framerate_max_boost > 0:
+            intervalometer.set_property("framerate-max-boost", float(args.framerate_max_boost))
+        intervalometer.set_property("framerate-step", float(args.framerate_step))
+        intervalometer.set_property("framerate-min-dwell", float(args.framerate_min_dwell))
 
     # Rotate 90 degrees. The two cameras are mounted with opposite handedness,
     # so the rotation direction depends on which one we're reading:
@@ -645,12 +713,22 @@ Examples:
     # glance whether e.g. --mode night was actually passed.
     boost_txt = (f"auto (dwell {args.boost_min_dwell:g}s)"
                  if args.auto_gain_boost else "static (from --mode seed)")
-    print(f"linescan recorder  |  mode={args.mode}  |  {framerate} fps  |  device-id={device_id}")
+    if adaptive_fps:
+        fps_hdr = (f"{framerate} fps seed -> adaptive {args.framerate_min:g}-{args.framerate_max:g}"
+                   + (f" ({args.framerate_max_boost:g} night)" if args.framerate_max_boost > 0 else ""))
+    else:
+        fps_hdr = f"{framerate} fps fixed"
+    print(f"linescan recorder  |  mode={args.mode}  |  {fps_hdr}  |  device-id={device_id}")
     print(f"  camera seed   : exposure={exposure} ms, gain={gain}, gain-boost={gain_boost}")
     gain_max_txt = (f"{iv_gain_max}" if args.gain_max_boost <= 0
                     else f"{iv_gain_max} ({args.gain_max_boost} while boosted)")
     print(f"  intervalometer: target-brightness={iv_target_brightness:g}, gain-max={gain_max_txt}, "
           f"ramp-rate={iv_ramp_rate}, gain-boost={boost_txt}")
+    if adaptive_fps:
+        fmb = (f", {args.framerate_max_boost:g} while boosted"
+               if args.framerate_max_boost > 0 else "")
+        print(f"  adaptive fps  : {args.framerate_min:g}-{args.framerate_max:g} fps{fmb}, "
+              f"x{args.framerate_step:g}/step, {args.framerate_min_dwell:g}s dwell (rung 4)")
     print(f"  linescan      : output-size={output_size}, emit-every={emit_every}"
           f"{' (preview off)' if not args.preview else ''}")
     print(f"  writing JPEGs : {output_dir}/")

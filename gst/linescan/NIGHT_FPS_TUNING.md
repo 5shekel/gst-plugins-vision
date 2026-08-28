@@ -3,8 +3,11 @@
 **Bench date:** 2026-08-28 (measurement tables below are from that session).
 **Last refreshed:** 2026-08-28 — folded in `emit-every`, `auto-gain-boost`, and the
 gain-cap knobs (`--gain-max` / `--gain-max-boost` + hard ceiling enforcement) that
-were built and verified on-rig the same night. Code is the source of truth; git log
-has anything newer than this file.
+were built and verified on-rig the same night. **Adaptive framerate (the
+intervalometer's 4th rung) landed the same day — see
+[`ADAPTIVE_FPS_DESIGN.md`](ADAPTIVE_FPS_DESIGN.md); the "framerate is not
+auto-managed" statements below are now historical.** Code is the source of truth;
+git log has anything newer than this file.
 
 **Rig:** IDS uEye line-scan camera, `device-id=1`, `ini/roi-dusk.ini`
 **Pipeline:** idsueyesrc → intervalometer → videoflip → linescan → …
@@ -26,11 +29,18 @@ has anything newer than this file.
 
 ### Night (light-limited)
 
-- **Framerate is not auto-managed.** You set `--framerate`; the camera pins it and
-  clamps *exposure* to `~1/fps`. Nothing in the pipeline lowers fps to gain light.
-- **Sensor ceiling for this ROI is ~150–160 fps.** Requesting 200/250/300/400 all
-  deliver ~155–160 fps actual. Requesting above ~200 only shortens the exposure cap
-  for frames you never get — strictly worse.
+- **Framerate is now auto-managed** (as of the adaptive-fps change — see
+  [`ADAPTIVE_FPS_DESIGN.md`](ADAPTIVE_FPS_DESIGN.md)). `--framerate` is only a
+  seed; the intervalometer varies the rate as its 4th rung within
+  `[--framerate-min, --framerate-max]`, with a lower `--framerate-max-boost`
+  ceiling while gain-boost is on. The rest of this section describes the
+  *fixed-framerate* behaviour that still applies under `--no-adaptive-framerate`.
+- **The ~150–160 fps actual seen at every request ≥ 200 was mostly the
+  `emit-every=1` pipeline wall**, not a sensor limit — these bench runs predate
+  `emit-every`. With `--emit-every auto` the night ceiling is `~1/exposure` minus
+  readout, so at a 2.46 ms cap (fps 400) it is meaningfully above 160.
+- Under `--no-adaptive-framerate`: requesting above ~200 with `emit-every=1` only
+  shortens the exposure cap for frames you never get — strictly worse.
 - **Without gain-boost the scene is too dark at every framerate.** The intervalometer
   pegs exposure *and* gain (82) and still never reaches `target-brightness=80`.
 - **With `gain-boost=true` the target band (70–90) is met from 100 up to ~300 fps.**
@@ -70,6 +80,11 @@ has anything newer than this file.
 - **Done:** gain-boost is now the intervalometer's third rung (exposure → gain →
   gain-boost) via `auto-gain-boost` (on by default in `launch_with_signal.py`), so
   dawn/dusk needs no manual mode switch or restart.
+- **Done:** framerate is now the intervalometer's **fourth** rung (exposure → gain
+  → gain-boost → framerate) via `--adaptive-framerate` (on by default), so one
+  launch runs the line as fast as the light allows across the whole diurnal cycle
+  — night settles low (long exposure), day climbs to `--framerate-max`. Full
+  design + test plan in [`ADAPTIVE_FPS_DESIGN.md`](ADAPTIVE_FPS_DESIGN.md).
 - **Done:** `timelapse.csv` no longer grows ~0.5 GB/day or wipes on restart — the
   intervalometer logs one row per `update-interval` (~3 MB/day), and
   `launch_with_signal.py` writes a dated `timelapse_<date>.csv` in `log-append=true`
@@ -293,12 +308,17 @@ Now:
 Verified: 90 frames over 3 s at `update-interval=500` → 6 rows (one per 0.5 s), and a
 second run against the same file appended with a single header.
 
-### 3. Framerate at night: leave it at 200
+### 3. Framerate at night — now the intervalometer's 4th rung (done)
 
-At night the intervalometer holds a long exposure, so `1/exposure` is the practical
-cap and ~150–200 fps is all you get regardless. Leave `--framerate 200`.
+Superseded by adaptive framerate ([`ADAPTIVE_FPS_DESIGN.md`](ADAPTIVE_FPS_DESIGN.md)).
+The intervalometer lowers fps toward `--framerate-min` once exposure, gain and
+gain-boost are all pinned and it is still dark (a longer `1/fps` exposure cap
+buys light), and raises it toward the effective ceiling when light returns. A
+`--framerate-max-boost` ceiling (default 400) caps the night rate below the
+daytime `--framerate-max` (default 800). Under `--no-adaptive-framerate` the old
+advice stands: leave `--framerate` at 200 for the night.
 
-**Daytime is different — see the next section.**
+**Daytime — see the next section.**
 
 ---
 
@@ -387,7 +407,11 @@ new that keys off linescan's output-buffer timing at the full rate would need a
 
 These throughput runs were at night (exposure floored, image black). What tonight
 cannot verify: image brightness at 800 fps in daylight, where exposure is capped at
-`1/800 = 1.25 ms`. Likely fine in full sun, but confirm when it's light out.
+`1/800 = 1.25 ms`. Likely fine in full sun, but confirm when it's light out — this
+is also the on-rig check that gates the adaptive `--framerate-max 800`
+([`ADAPTIVE_FPS_DESIGN.md`](ADAPTIVE_FPS_DESIGN.md) → *Known limitations* #4).
+With adaptive fps on (the default) daytime reaches 800 on its own; no `--mode day
+--output-size 448` needed.
 
 ### Also for an unattended months-long run
 

@@ -67,7 +67,12 @@ enum
   PROP_BRIGHTNESS_DEADBAND,
   PROP_AUTO_GAIN_BOOST,
   PROP_BOOST_MIN_DWELL,
-  PROP_GAIN_MAX_BOOST
+  PROP_GAIN_MAX_BOOST,
+  PROP_FRAMERATE_MIN,
+  PROP_FRAMERATE_MAX,
+  PROP_FRAMERATE_MAX_BOOST,
+  PROP_FRAMERATE_STEP,
+  PROP_FRAMERATE_MIN_DWELL
 };
 
 #define DEFAULT_PROP_ENABLED TRUE
@@ -87,6 +92,11 @@ enum
 #define DEFAULT_PROP_AUTO_GAIN_BOOST FALSE     /* Off by default - opt in for unattended dawn/dusk runs */
 #define DEFAULT_PROP_BOOST_MIN_DWELL 120.0     /* Hold a gain-boost state >=2 min before toggling back */
 #define DEFAULT_PROP_GAIN_MAX_BOOST 0          /* 0 = while boosted, keep using gain_max */
+#define DEFAULT_PROP_FRAMERATE_MIN 0.0         /* 0 (with max 0) = adaptive framerate disabled */
+#define DEFAULT_PROP_FRAMERATE_MAX 0.0         /* daytime fps ceiling; 0 = disabled */
+#define DEFAULT_PROP_FRAMERATE_MAX_BOOST 0.0   /* 0 = while boosted, keep using framerate_max */
+#define DEFAULT_PROP_FRAMERATE_STEP 1.15       /* +/-15% per fps adjustment */
+#define DEFAULT_PROP_FRAMERATE_MIN_DWELL 20.0  /* hold an fps for >=20 s before changing again */
 
 /* GStreamer boilerplate */
 #define gst_intervalometer_parent_class parent_class
@@ -153,6 +163,11 @@ static gboolean gst_intervalometer_toggle_gain_boost (GstIntervalometer * filter
     gboolean enable);
 static gint gst_intervalometer_effective_gain_max (GstIntervalometer * filter,
     gboolean boosted);
+static gdouble gst_intervalometer_effective_framerate_max (GstIntervalometer * filter,
+    gboolean boosted);
+static gboolean gst_intervalometer_fps_control_active (GstIntervalometer * filter);
+static gboolean gst_intervalometer_set_framerate (GstIntervalometer * filter,
+    gdouble new_fps, gboolean force);
 static void gst_intervalometer_write_log (GstIntervalometer * filter,
     gdouble brightness);
 static GstElement * gst_intervalometer_find_camera_element (GstIntervalometer * filter);
@@ -300,6 +315,51 @@ gst_intervalometer_class_init (GstIntervalometerClass * klass)
           0, 1000, DEFAULT_PROP_GAIN_MAX_BOOST,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_FRAMERATE_MIN,
+      g_param_spec_double ("framerate-min", "Adaptive Framerate Minimum",
+          "Lower bound for adaptive framerate control (fps). Adaptive control is "
+          "active only when framerate-min > 0 AND framerate-max > framerate-min "
+          "AND the camera element has a 'framerate' property. When active it is "
+          "added as a fourth brightness rung below gain-boost: too dark with "
+          "exposure, gain and gain-boost all pinned -> lower fps (longer 1/fps "
+          "exposure cap); surplus light with exposure and gain floored and boost "
+          "off -> raise fps. NOTE: while active, exposure-max is re-derived from "
+          "the camera on every fps change, so pinning exposure-max is unsupported.",
+          0.0, 100000.0, DEFAULT_PROP_FRAMERATE_MIN,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_FRAMERATE_MAX,
+      g_param_spec_double ("framerate-max", "Adaptive Framerate Maximum",
+          "Upper bound for adaptive framerate control (fps), i.e. the daytime "
+          "ceiling. 0 = adaptive framerate disabled.",
+          0.0, 100000.0, DEFAULT_PROP_FRAMERATE_MAX,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_FRAMERATE_MAX_BOOST,
+      g_param_spec_double ("framerate-max-boost", "Framerate Max While Boosted",
+          "Framerate ceiling that replaces framerate-max while gain-boost is "
+          "active (= night). 0 = keep using framerate-max in both states. Mirrors "
+          "gain-max-boost: when boost engages at dusk the fps is snapped down to "
+          "this value, then the fourth rung ramps it toward framerate-min as it "
+          "gets darker.",
+          0.0, 100000.0, DEFAULT_PROP_FRAMERATE_MAX_BOOST,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_FRAMERATE_STEP,
+      g_param_spec_double ("framerate-step", "Framerate Step",
+          "Multiplicative step applied per fps adjustment (fps *= step to raise, "
+          "fps /= step to lower). 1.15 = +/-15% per step.",
+          1.01, 4.0, DEFAULT_PROP_FRAMERATE_STEP,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_FRAMERATE_MIN_DWELL,
+      g_param_spec_double ("framerate-min-dwell", "Framerate Minimum Dwell",
+          "Minimum seconds to hold a framerate before the fourth rung may change "
+          "it again (anti-chatter on passing clouds at dawn/dusk). Ceiling "
+          "snap-downs when gain-boost engages bypass this.",
+          0.0, 3600.0, DEFAULT_PROP_FRAMERATE_MIN_DWELL,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   /* Set element metadata */
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_intervalometer_sink_template));
@@ -341,6 +401,11 @@ gst_intervalometer_init (GstIntervalometer * filter)
   filter->auto_gain_boost = DEFAULT_PROP_AUTO_GAIN_BOOST;
   filter->boost_min_dwell = DEFAULT_PROP_BOOST_MIN_DWELL;
   filter->gain_max_boost = DEFAULT_PROP_GAIN_MAX_BOOST;
+  filter->framerate_min = DEFAULT_PROP_FRAMERATE_MIN;
+  filter->framerate_max = DEFAULT_PROP_FRAMERATE_MAX;
+  filter->framerate_max_boost = DEFAULT_PROP_FRAMERATE_MAX_BOOST;
+  filter->framerate_step = DEFAULT_PROP_FRAMERATE_STEP;
+  filter->framerate_min_dwell = DEFAULT_PROP_FRAMERATE_MIN_DWELL;
 
   /* Initialize internal state */
   filter->camera_src = NULL;
@@ -350,10 +415,12 @@ gst_intervalometer_init (GstIntervalometer * filter)
   filter->target_exposure = DEFAULT_PROP_EXPOSURE_MIN;
   filter->target_gain = DEFAULT_PROP_GAIN_MIN;
   filter->boost_active = FALSE;
+  filter->current_framerate = 0.0;
   filter->frame_count = 0;
   filter->start_time = GST_CLOCK_TIME_NONE;
   filter->last_update_time = GST_CLOCK_TIME_NONE;
   filter->last_boost_toggle_time = GST_CLOCK_TIME_NONE;
+  filter->last_framerate_change_time = GST_CLOCK_TIME_NONE;
   filter->log_fp = NULL;
   filter->log_header_written = FALSE;
   filter->video_info_valid = FALSE;
@@ -430,6 +497,21 @@ gst_intervalometer_set_property (GObject * object, guint prop_id,
     case PROP_GAIN_MAX_BOOST:
       filter->gain_max_boost = g_value_get_int (value);
       break;
+    case PROP_FRAMERATE_MIN:
+      filter->framerate_min = g_value_get_double (value);
+      break;
+    case PROP_FRAMERATE_MAX:
+      filter->framerate_max = g_value_get_double (value);
+      break;
+    case PROP_FRAMERATE_MAX_BOOST:
+      filter->framerate_max_boost = g_value_get_double (value);
+      break;
+    case PROP_FRAMERATE_STEP:
+      filter->framerate_step = g_value_get_double (value);
+      break;
+    case PROP_FRAMERATE_MIN_DWELL:
+      filter->framerate_min_dwell = g_value_get_double (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -493,6 +575,21 @@ gst_intervalometer_get_property (GObject * object, guint prop_id,
       break;
     case PROP_GAIN_MAX_BOOST:
       g_value_set_int (value, filter->gain_max_boost);
+      break;
+    case PROP_FRAMERATE_MIN:
+      g_value_set_double (value, filter->framerate_min);
+      break;
+    case PROP_FRAMERATE_MAX:
+      g_value_set_double (value, filter->framerate_max);
+      break;
+    case PROP_FRAMERATE_MAX_BOOST:
+      g_value_set_double (value, filter->framerate_max_boost);
+      break;
+    case PROP_FRAMERATE_STEP:
+      g_value_set_double (value, filter->framerate_step);
+      break;
+    case PROP_FRAMERATE_MIN_DWELL:
+      g_value_set_double (value, filter->framerate_min_dwell);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -695,6 +792,99 @@ gst_intervalometer_effective_gain_max (GstIntervalometer * filter,
   return filter->gain_max;
 }
 
+/* Framerate ceiling in force right now: framerate_max, or the lower
+ * framerate_max_boost while gain-boost is (or is about to be) active = night. */
+static gdouble
+gst_intervalometer_effective_framerate_max (GstIntervalometer * filter,
+    gboolean boosted)
+{
+  if (filter->framerate_max <= 0.0)
+    return filter->framerate_max;
+  if (boosted && filter->framerate_max_boost > 0.0)
+    return MIN (filter->framerate_max_boost, filter->framerate_max);
+  return filter->framerate_max;
+}
+
+/* Adaptive framerate is the fourth brightness rung, opt-in: it runs only when a
+ * usable [min,max] band is set and the camera element actually exposes a
+ * writable 'framerate' property. */
+static gboolean
+gst_intervalometer_fps_control_active (GstIntervalometer * filter)
+{
+  if (filter->framerate_min <= 0.0
+      || filter->framerate_max <= filter->framerate_min)
+    return FALSE;
+  if (!filter->camera_src)
+    return FALSE;
+  return g_object_class_find_property (G_OBJECT_GET_CLASS (filter->camera_src),
+      "framerate") != NULL;
+}
+
+/* Command a new camera framerate. Honours framerate-min-dwell unless force is
+ * TRUE (ceiling snap-downs when gain-boost engages). Clamps to
+ * [framerate_min, effective framerate_max]. Because idsueyesrc re-clamps
+ * exposure to ~1/fps whenever framerate changes, this also re-derives
+ * exposure_max from the camera and pulls the controller's exposure belief back
+ * under the new cap. Returns TRUE if the framerate actually changed. */
+static gboolean
+gst_intervalometer_set_framerate (GstIntervalometer * filter, gdouble new_fps,
+    gboolean force)
+{
+  GstClockTime now;
+  gdouble eff_max, lo, hi;
+
+  if (!filter->camera_src)
+    return FALSE;
+
+  now = gst_clock_get_time (gst_system_clock_obtain ());
+  if (!force && filter->last_framerate_change_time != GST_CLOCK_TIME_NONE) {
+    gdouble held = (gdouble) GST_CLOCK_DIFF (filter->last_framerate_change_time,
+        now) / GST_SECOND;
+    if (held < filter->framerate_min_dwell) {
+      GST_LOG_OBJECT (filter,
+          "framerate change to %.1f deferred: held %.0f s < min-dwell %.0f s",
+          new_fps, held, filter->framerate_min_dwell);
+      return FALSE;
+    }
+  }
+
+  eff_max = gst_intervalometer_effective_framerate_max (filter,
+      filter->boost_active);
+  lo = filter->framerate_min;
+  hi = (eff_max > 0.0) ? eff_max : new_fps;
+  new_fps = CLAMP (new_fps, lo, hi);
+
+  if (fabs (new_fps - filter->current_framerate) < 0.5)
+    return FALSE;
+
+  g_object_set (filter->camera_src, "framerate", new_fps, NULL);
+  GST_INFO_OBJECT (filter, "Framerate rung: %.1f -> %.1f fps (boost %s)",
+      filter->current_framerate, new_fps, filter->boost_active ? "on" : "off");
+  filter->current_framerate = new_fps;
+  filter->last_framerate_change_time = now;
+
+  /* Re-derive the exposure ceiling: idsueyesrc has just re-clamped exposure to
+   * ~1/fps, so query the range back rather than trusting a stale value. */
+  if (filter->hCam) {
+    double exposure_range[3];
+    INT ret = is_Exposure (filter->hCam, IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE,
+        exposure_range, sizeof (exposure_range));
+    if (ret == IS_SUCCESS)
+      filter->exposure_max = exposure_range[1];
+    else
+      filter->exposure_max = 1000.0 / new_fps;   /* model fallback */
+  } else {
+    filter->exposure_max = 1000.0 / new_fps;
+  }
+
+  if (filter->current_exposure > filter->exposure_max)
+    filter->current_exposure = filter->exposure_max;
+  if (filter->target_exposure > filter->exposure_max)
+    filter->target_exposure = filter->exposure_max;
+
+  return TRUE;
+}
+
 static void
 gst_intervalometer_reset (GstIntervalometer * filter)
 {
@@ -739,6 +929,33 @@ gst_intervalometer_reset (GstIntervalometer * filter)
     filter->target_exposure = filter->exposure_min;
     filter->target_gain = filter->gain_min;
   }
+
+  /* Seed the tracked framerate from the camera (also used for the CSV column),
+   * then snap it into the adaptive band if the --mode seed left it outside
+   * (mirrors the gain snap-down). */
+  filter->last_framerate_change_time = GST_CLOCK_TIME_NONE;
+  if (filter->camera_src
+      && g_object_class_find_property (G_OBJECT_GET_CLASS (filter->camera_src),
+          "framerate")) {
+    gdouble fps = 0.0;
+    g_object_get (filter->camera_src, "framerate", &fps, NULL);
+    if (fps > 0.0)
+      filter->current_framerate = fps;
+    GST_INFO_OBJECT (filter, "Queried current framerate: %.1f fps",
+        filter->current_framerate);
+    /* Snap an out-of-band --mode seed down, but only once the camera handle is
+     * live (2nd reset, after query_camera_capabilities) so set_framerate can
+     * re-query the real exposure_max instead of the 1000/fps model. */
+    if (filter->hCam && gst_intervalometer_fps_control_active (filter)) {
+      gdouble eff = gst_intervalometer_effective_framerate_max (filter,
+          filter->boost_active);
+      gdouble clamped = CLAMP (filter->current_framerate, filter->framerate_min,
+          eff);
+      if (fabs (clamped - filter->current_framerate) > 0.5)
+        gst_intervalometer_set_framerate (filter, clamped, TRUE);
+    }
+  }
+
   filter->frame_count = 0;
   filter->last_boost_toggle_time = GST_CLOCK_TIME_NONE;
 }
@@ -839,6 +1056,16 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
     g_object_set (filter->camera_src, "gain", eff_gain_max, NULL);
   }
 
+  /* Same for the framerate ceiling: when gain-boost engaged the effective max
+   * dropped to framerate_max_boost, so snap the camera down at once (dwell
+   * bypassed) rather than crawling there via the rung below. */
+  if (gst_intervalometer_fps_control_active (filter)) {
+    gdouble eff_fps_max = gst_intervalometer_effective_framerate_max (filter,
+        filter->boost_active);
+    if (eff_fps_max > 0.0 && filter->current_framerate > eff_fps_max + 0.5)
+      gst_intervalometer_set_framerate (filter, eff_fps_max, TRUE);
+  }
+
   /* Calculate brightness error with compensation */
   error = (filter->target_brightness - brightness) *
       pow (2.0, filter->compensation);
@@ -866,7 +1093,7 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
   #define EXPOSURE_TOLERANCE 0.01  /* 0.01 ms tolerance */
   
   if (brightness > adjusted_target) {
-    /* Too bright - decrease exposure first, then gain, then gain-boost */
+    /* Too bright - decrease exposure, then gain, then gain-boost, then raise fps */
     if (filter->current_exposure > (filter->exposure_min + EXPOSURE_TOLERANCE)) {
       filter->target_exposure = filter->current_exposure -
           (exposure_range * 0.01 * ramp_multiplier);
@@ -879,9 +1106,19 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
        * Returns early on success - the recentre already pushed a new gain. */
       if (gst_intervalometer_toggle_gain_boost (filter, FALSE))
         return;
+    } else if (gst_intervalometer_fps_control_active (filter)
+        && filter->current_framerate <
+        gst_intervalometer_effective_framerate_max (filter,
+            filter->boost_active) - 0.5) {
+      /* Rung 4: exposure and gain floored, gain-boost off, still surplus light
+       * -> spend it on line rate. The higher fps shortens the 1/fps exposure
+       * cap; the exposure rung refills exposure toward it next updates. */
+      if (gst_intervalometer_set_framerate (filter,
+              filter->current_framerate * filter->framerate_step, FALSE))
+        return;
     }
   } else {
-    /* Too dark - increase exposure first up to max, then gain, then gain-boost */
+    /* Too dark - increase exposure, then gain, then gain-boost, then lower fps */
     if (filter->current_exposure < (filter->exposure_max - EXPOSURE_TOLERANCE)) {
       filter->target_exposure = filter->current_exposure +
           (exposure_range * 0.01 * ramp_multiplier);
@@ -894,6 +1131,15 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
        * (Gain sitting above eff_gain_max is already snapped down at the top of
        * this function, so "gain maxed" here means at the ceiling.) */
       if (gst_intervalometer_toggle_gain_boost (filter, TRUE))
+        return;
+    } else if (gst_intervalometer_fps_control_active (filter)
+        && filter->current_framerate > filter->framerate_min + 0.5) {
+      /* Rung 4: exposure at the 1/fps cap, gain at its ceiling, gain-boost
+       * already on (or auto-boost off) and still too dark -> trade line rate
+       * for a longer exposure cap by lowering fps. set_framerate re-derives
+       * exposure_max upward so the exposure rung then climbs into the headroom. */
+      if (gst_intervalometer_set_framerate (filter,
+              filter->current_framerate / filter->framerate_step, FALSE))
         return;
     }
   }
@@ -992,7 +1238,7 @@ gst_intervalometer_write_log (GstIntervalometer * filter, gdouble brightness)
   /* Write CSV header once (skipped when appending to a non-empty file) */
   if (!filter->log_header_written) {
     fprintf (filter->log_fp,
-        "Frame,Time_s,Brightness,Exposure_ms,Gain,Target_Brightness,GainBoost\n");
+        "Frame,Time_s,Brightness,Exposure_ms,Gain,Target_Brightness,GainBoost,Framerate\n");
     filter->log_header_written = TRUE;
   }
 
@@ -1001,14 +1247,15 @@ gst_intervalometer_write_log (GstIntervalometer * filter, gdouble brightness)
   gdouble elapsed = (now - filter->start_time) / 1000000000.0;
 
   /* Write data row */
-  fprintf (filter->log_fp, "%llu,%.3f,%.2f,%.3f,%d,%.2f,%d\n",
+  fprintf (filter->log_fp, "%llu,%.3f,%.2f,%.3f,%d,%.2f,%d,%.1f\n",
       (unsigned long long) filter->frame_count,
       elapsed,
       brightness,
       filter->current_exposure,
       filter->current_gain,
       filter->target_brightness,
-      filter->boost_active ? 1 : 0);
+      filter->boost_active ? 1 : 0,
+      filter->current_framerate);
 
   /* Flush so `Get-Content -Wait` tails it live. Now that this runs once per
    * update-interval (~1 Hz) rather than per frame, the fsync cost is trivial. */
