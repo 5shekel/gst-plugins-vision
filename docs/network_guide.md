@@ -36,7 +36,7 @@ For more advanced control including runtime exposure and framerate adjustments, 
 
 ### Launch Camera with Control Interface
 
-See [`scripts/launch-ids.py`](scripts/launch-ids.py) for the complete implementation.
+See [`scripts/launch-ids.py`](../scripts/launch-ids.py) for the complete implementation.
 
 ```pwsh
 # Setup GStreamer environment and run
@@ -71,7 +71,7 @@ echo "STATUS" | nc -u 127.0.0.1 5001
 
 ### Testing the Control Interface
 
-See [`scripts/camera_control.py`](scripts/camera_control.py) for automated testing.
+See [`scripts/camera_control.py`](../scripts/camera_control.py) for automated testing.
 
 ```pwsh
 # Run comprehensive test suite (15 tests)
@@ -393,7 +393,7 @@ uv run .\scripts\recv_raw_rolling.py --display-fps 60 --save-mjpeg .\results\out
 uv run .\scripts\recv_raw_rolling.py --no-display
 ```
 
-See [`scripts/recv_raw_rolling.py`](scripts/recv_raw_rolling.py) for the Python implementation with debug options.
+See [`scripts/recv_raw_rolling.py`](../scripts/recv_raw_rolling.py) for the Python implementation with debug options.
 
 ### UDP Traffic Analysis & Debugging
 
@@ -451,7 +451,7 @@ uv run .\scripts\udp_sniffer_raw.py
 
 For live visualization of RGB/BGR channel values across the line sensor, use the real-time plotter.
 
-See [`scripts/visualize_line_realtime.py`](scripts/visualize_line_realtime.py) for the implementation.
+See [`scripts/visualize_line_realtime.py`](../scripts/visualize_line_realtime.py) for the implementation.
 
 ```pwsh
 # Basic usage (assumes BGR format, 2456 width, port 5000)

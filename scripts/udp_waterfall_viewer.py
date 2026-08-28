@@ -12,7 +12,7 @@
 UDP Waterfall Viewer with Signal/Blob Detection
 Receives line scan data from port 5000 and displays as scrolling waterfall plot
 
-Based on network_guide.md:
+Based on docs/network_guide.md:
 - Real data: 2456x1 BGR (7368 bytes per line)
 - Each UDP packet = one line of the waterfall
 

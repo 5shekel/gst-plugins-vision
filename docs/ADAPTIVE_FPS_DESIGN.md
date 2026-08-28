@@ -15,10 +15,10 @@ hit from over-requesting fps at night.
   `framerate` GObject property while streaming calls
   `gst_idsueyesrc_set_framerate_exposure()` →
   `is_SetFrameRate(hCam, fps, &new_fps)` and then re-clamps exposure to `~1/fps`
-  ([`gstidsueyesrc.c:271-276`](../../sys/idsueye/gstidsueyesrc.c#L271-L276),
-  [`:1051`](../../sys/idsueye/gstidsueyesrc.c#L1051)).
+  ([`gstidsueyesrc.c:271-276`](../sys/idsueye/gstidsueyesrc.c#L271-L276),
+  [`:1051`](../sys/idsueye/gstidsueyesrc.c#L1051)).
 - **`framerate` is never written into the src caps**
-  ([`gstidsueyesrc.c:551-554`](../../sys/idsueye/gstidsueyesrc.c#L551-L554) sets
+  ([`gstidsueyesrc.c:551-554`](../sys/idsueye/gstidsueyesrc.c#L551-L554) sets
   only format/width/height). So changing it mid-stream triggers **no caps
   renegotiation** — it is a pure side-band SDK call. The pipeline already
   tolerates buffer-rate ≠ nominal-rate (the `emit-every` decimator does the same
@@ -38,7 +38,7 @@ hit from over-requesting fps at night.
 ## The 4-rung ladder
 
 `gst_intervalometer_update_camera_settings()` in
-[`../intervalometer/gstintervalometer.c`](../intervalometer/gstintervalometer.c).
+[`gst/intervalometer/gstintervalometer.c`](../gst/intervalometer/gstintervalometer.c).
 Framerate is appended as the **outermost rung on both sides** — it only moves
 once every existing rung is exhausted, so the well-tuned diurnal exposure/gain
 ramp is byte-for-byte unchanged until it hits a rail.

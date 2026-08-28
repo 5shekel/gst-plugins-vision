@@ -71,7 +71,7 @@
 #   Run test client: uv run .\scripts\camera_control.py
 #
 # Documentation:
-#   See scripts/UDP_CONTROL_PROTOCOL.md for full protocol details
+#   See docs/UDP_CONTROL_PROTOCOL.md for full protocol details
 #
 # Add GStreamer Python packages
 import argparse

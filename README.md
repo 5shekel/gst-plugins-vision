@@ -107,7 +107,7 @@ set (the script adds the GI typelibs and DLL bin dir from it).
 [`startup_linescan.ps1`](startup_linescan.ps1) +
 [`register_startup.ps1`](register_startup.ps1) register a Task Scheduler job that
 launches the recorder on login, picking day/night mode from the clock. See
-[STARTUP.md](STARTUP.md).
+[docs/STARTUP.md](docs/STARTUP.md).
 
 ## Network streaming
 
@@ -116,9 +116,9 @@ sends raw `video/x-raw` over `udpsink`, with a plain-text UDP control protocol o
 port 5001 for live parameter changes. This needs a genuine one-row-per-frame ROI
 such as [`ini/2456x4pix-500top-cw-extragain.ini`](ini/2456x4pix-500top-cw-extragain.ini)
 (`videocrop bottom=3` → 2456 × 1); a UDP datagram cannot exceed 65507 bytes, so a
-tall ROI will not fit. See [network_guide.md](network_guide.md),
+tall ROI will not fit. See [docs/network_guide.md](docs/network_guide.md),
 [scripts/UDP_STREAM_TESTING.md](scripts/UDP_STREAM_TESTING.md), and
-[scripts/UDP_CONTROL_PROTOCOL.md](scripts/UDP_CONTROL_PROTOCOL.md).
+[docs/UDP_CONTROL_PROTOCOL.md](docs/UDP_CONTROL_PROTOCOL.md).
 
 ## Dependencies
 

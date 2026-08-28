@@ -5,8 +5,8 @@ Automated startup system for running linescan pipelines on Windows boot with int
 ## Overview
 
 This system automatically launches both linescan components when Windows starts:
-1. [`launch_linescan.ps1`](launch_linescan.ps1) - Pipeline launcher wrapper
-2. [`gst/linescan/launch_with_signal.py`](gst/linescan/launch_with_signal.py) - Signal capture pipeline
+1. [`launch_linescan.ps1`](../launch_linescan.ps1) - Pipeline launcher wrapper
+2. [`gst/linescan/launch_with_signal.py`](../gst/linescan/launch_with_signal.py) - Signal capture pipeline
 
 **Key Features:**
 - ⏰ **Automatic time-based mode selection**: Day mode before 5pm, night mode after 5pm
@@ -45,9 +45,9 @@ Log out and log back in (or reboot). After 30 seconds, you should see two PowerS
 
 | File | Purpose |
 |------|---------|
-| [`startup_linescan.ps1`](startup_linescan.ps1) | Main startup script that launches both pipelines |
-| [`register_startup.ps1`](register_startup.ps1) | Registers/unregisters the Task Scheduler task |
-| `STARTUP.md` | This documentation file |
+| [`startup_linescan.ps1`](../startup_linescan.ps1) | Main startup script that launches both pipelines |
+| [`register_startup.ps1`](../register_startup.ps1) | Registers/unregisters the Task Scheduler task |
+| `docs/STARTUP.md` | This documentation file |
 
 ## Usage
 
@@ -100,7 +100,7 @@ The mode is determined when the script runs, logged for reference.
 
 ### Modify Startup Delay
 
-Edit [`startup_linescan.ps1`](startup_linescan.ps1:16):
+Edit [`startup_linescan.ps1`](../startup_linescan.ps1:16):
 
 ```powershell
 param(
@@ -112,7 +112,7 @@ param(
 
 ### Change Time Threshold for Night Mode
 
-Edit [`startup_linescan.ps1`](startup_linescan.ps1:96-102):
+Edit [`startup_linescan.ps1`](../startup_linescan.ps1:96-102):
 
 ```powershell
 # Determine mode based on time of day
@@ -127,12 +127,12 @@ if ($currentHour -ge 17) {  # Change 17 to your desired hour (24-hour format)
 
 If your workspace is not at `c:\dev\gst-plugins-vision`, update both scripts:
 
-[`startup_linescan.ps1`](startup_linescan.ps1:61):
+[`startup_linescan.ps1`](../startup_linescan.ps1:61):
 ```powershell
 $workspaceRoot = "c:\dev\gst-plugins-vision"  # Update this path
 ```
 
-[`register_startup.ps1`](register_startup.ps1:50):
+[`register_startup.ps1`](../register_startup.ps1:50):
 ```powershell
 $workspaceRoot = "c:\dev\gst-plugins-vision"  # Update this path
 ```
@@ -212,7 +212,7 @@ The pipelines will shut down gracefully.
 
 1. Check the log file: `c:\dev\gst-plugins-vision\startup_linescan.log`
 
-2. Verify paths are correct in [`startup_linescan.ps1`](startup_linescan.ps1:61)
+2. Verify paths are correct in [`startup_linescan.ps1`](../startup_linescan.ps1:61)
 
 3. Test manually:
    ```powershell
@@ -230,8 +230,8 @@ The pipelines will shut down gracefully.
 ### Pipelines fail to start
 
 1. Check individual script documentation:
-   - [`launch_linescan.ps1`](launch_linescan.ps1) help: `.\launch_linescan.ps1 -Help`
-   - [`launch_with_signal.py`](gst/linescan/launch_with_signal.py) help: `uv run .\gst\linescan\launch_with_signal.py --help`
+   - [`launch_linescan.ps1`](../launch_linescan.ps1) help: `.\launch_linescan.ps1 -Help`
+   - [`launch_with_signal.py`](../gst/linescan/launch_with_signal.py) help: `uv run .\gst\linescan\launch_with_signal.py --help`
 
 2. Verify GStreamer environment is set up:
    ```powershell
@@ -248,7 +248,7 @@ See the [Configuration](#configuration) section above for common modifications.
 
 ### Custom Launch Arguments
 
-To pass custom arguments to the underlying scripts, modify [`startup_linescan.ps1`](startup_linescan.ps1):
+To pass custom arguments to the underlying scripts, modify [`startup_linescan.ps1`](../startup_linescan.ps1):
 
 For `launch_linescan.ps1` (line 104):
 ```powershell
@@ -262,7 +262,7 @@ For `launch_with_signal.py` (line 124):
 
 ### Run Without Task Scheduler
 
-You can place a shortcut to [`startup_linescan.ps1`](startup_linescan.ps1) in the Windows Startup folder:
+You can place a shortcut to [`startup_linescan.ps1`](../startup_linescan.ps1) in the Windows Startup folder:
 
 1. Press `Win+R` and type: `shell:startup`
 2. Create a shortcut to `startup_linescan.ps1` in that folder
@@ -272,14 +272,14 @@ However, Task Scheduler is recommended as it provides better logging and control
 
 ### Multiple Configurations
 
-To support multiple startup configurations (e.g., different camera settings), create copies of [`startup_linescan.ps1`](startup_linescan.ps1) with different parameters and register multiple tasks with different names.
+To support multiple startup configurations (e.g., different camera settings), create copies of [`startup_linescan.ps1`](../startup_linescan.ps1) with different parameters and register multiple tasks with different names.
 
 ## See Also
 
-- [`launch_linescan.ps1`](launch_linescan.ps1) - Pipeline launcher wrapper
-- [`gst/linescan/launch_with_signal.py`](gst/linescan/launch_with_signal.py) - Signal capture pipeline
-- [`scripts/launch-ids.py`](scripts/launch-ids.py) - Core pipeline launcher
-- [GStreamer Linescan Plugin README](gst/linescan/README.md)
+- [`launch_linescan.ps1`](../launch_linescan.ps1) - Pipeline launcher wrapper
+- [`gst/linescan/launch_with_signal.py`](../gst/linescan/launch_with_signal.py) - Signal capture pipeline
+- [`scripts/launch-ids.py`](../scripts/launch-ids.py) - Core pipeline launcher
+- [GStreamer Linescan Plugin README](../gst/linescan/README.md)
 
 ## Support
 

@@ -10,7 +10,7 @@
 UDP Payload Analyzer for GStreamer Raw Video
 Analyzes UDP packets on port 5000 and reports on payload structure
 
-Based on network_guide.md:
+Based on docs/network_guide.md:
 - Real data: 2456x1 BGR (7368 bytes per line)
 - Demo data: 1x640 RGB (1920 bytes per frame)
 
@@ -79,7 +79,7 @@ class PayloadAnalyzer:
             'format': 'unknown'
         }
         
-        # Check for known video formats from network_guide.md
+        # Check for known video formats from docs/network_guide.md
         if size == 7368:  # 2456 × 1 × 3 (BGR)
             analysis['format'] = 'BGR'
             analysis['width'] = 2456

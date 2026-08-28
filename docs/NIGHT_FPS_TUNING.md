@@ -98,13 +98,13 @@ git log has anything newer than this file.
 
 Every runtime `g_object_set(cam, "exposure", …)` (the intervalometer does this
 continuously) re-enters `gst_idsueyesrc_set_framerate_exposure()`
-([`sys/idsueye/gstidsueyesrc.c:265-269`](../../sys/idsueye/gstidsueyesrc.c#L265-L269)),
+([`sys/idsueye/gstidsueyesrc.c:265-269`](../sys/idsueye/gstidsueyesrc.c#L265-L269)),
 which:
 
 1. Re-asserts `is_SetFrameRate(hCam, src->framerate, &new_fps)` first
-   ([`:1057`](../../sys/idsueye/gstidsueyesrc.c#L1057)) — fps stays exactly what you asked.
+   ([`:1057`](../sys/idsueye/gstidsueyesrc.c#L1057)) — fps stays exactly what you asked.
 2. Queries the exposure range *at that fps* and clamps the requested exposure to
-   `[min, ~1/fps]` ([`:1093-1102`](../../sys/idsueye/gstidsueyesrc.c#L1093-L1102)).
+   `[min, ~1/fps]` ([`:1093-1102`](../sys/idsueye/gstidsueyesrc.c#L1093-L1102)).
 
 The `new_fps` out-param (the rate the sensor can actually sustain) is **discarded**,
 so requesting more than the sensor can deliver is silent — you just get a shorter
@@ -113,7 +113,7 @@ exposure cap.
 ### `intervalometer` owns exposure, gain, and gain-boost
 
 `gst_intervalometer_update_camera_settings()`
-([`gst/intervalometer/gstintervalometer.c`](../intervalometer/gstintervalometer.c),
+([`gst/intervalometer/gstintervalometer.c`](../gst/intervalometer/gstintervalometer.c),
 `gst_intervalometer_update_camera_settings` / `gst_intervalometer_toggle_gain_boost`):
 a three-rung ladder. Too dark → raise exposure (up to `exposure-max`), then gain (up
 to the effective ceiling), then, if `auto-gain-boost` is on and both are pinned,
@@ -176,7 +176,7 @@ exposure (gain fixed): ≈6.4–7.9 brightness units per ms.
 | 400 | ~150 | 2.46 (cap) | 82 (max) | **66** | no — pegged, falls short |
 
 Confirmed working at runtime: log shows `idsueyesrc … Gain boost enabled`
-(`is_SetGainBoost`, [`gstidsueyesrc.c:300-308`](../../sys/idsueye/gstidsueyesrc.c#L300-L308)).
+(`is_SetGainBoost`, [`gstidsueyesrc.c:300-308`](../sys/idsueye/gstidsueyesrc.c#L300-L308)).
 
 ---
 
@@ -233,7 +233,7 @@ noise. So it is set from `--mode` in the launchers instead:
 ## Running for months — seamless day/night operation
 
 The production recorder is
-[`gst/linescan/launch_with_signal.py`](launch_with_signal.py) (long-lived Python
+[`gst/linescan/launch_with_signal.py`](../gst/linescan/launch_with_signal.py) (long-lived Python
 process, builds the pipeline via the GI API). `--mode day|night` is chosen **once at
 launch** and only seeds `exposure`/`gain`/`gain-boost`; the intervalometer overrides
 all three within seconds and then handles the whole diurnal brightness ramp on its
@@ -254,7 +254,7 @@ outside the deadband on the dark side.
 
 Implemented in `gst_intervalometer_update_camera_settings()` /
 `gst_intervalometer_toggle_gain_boost()`
-([`gstintervalometer.c`](../intervalometer/gstintervalometer.c)):
+([`gstintervalometer.c`](../gst/intervalometer/gstintervalometer.c)):
 
 - new props: **`auto-gain-boost`** (bool, default FALSE) and **`boost-min-dwell`**
   (seconds, default 120) — the dwell blocks re-toggling on a passing cloud at dusk.
@@ -329,7 +329,7 @@ The camera is not the 200 fps limit. `ini/roi-dusk.ini` was captured at
 daytime exposure (~0.02–1.25 ms) never constrains fps.
 
 **The recorder pipeline caps at ~180 fps**, and it is the full-roll copy in
-`gst_linescan_transform()` ([`gstlinescan.c`](gstlinescan.c), the
+`gst_linescan_transform()` ([`gstlinescan.c`](../gst/linescan/gstlinescan.c), the
 `memcpy (map_out.data, filter->line_buffer, map_out.size)` line):
 
 ```c
@@ -392,9 +392,9 @@ uv run gst/linescan/launch_with_signal.py --mode day --framerate 800
 # auto -> emit-every 27 (800/30); preview + JPEG cadence unchanged
 ```
 
-Implementation: [`gstlinescan.c`](gstlinescan.c) `gst_linescan_transform` /
+Implementation: [`gstlinescan.c`](../gst/linescan/gstlinescan.c) `gst_linescan_transform` /
 `gst_linescan_prepare_output_buffer`; property state `emit_every` /
-`frames_since_emit` / `will_emit` in [`gstlinescan.h`](gstlinescan.h).
+`frames_since_emit` / `will_emit` in [`gstlinescan.h`](../gst/linescan/gstlinescan.h).
 
 **Caveat:** the src caps still carry the camera `framerate`, so downstream sees a
 buffer rate lower than the declared framerate (typical for a decimator). The preview

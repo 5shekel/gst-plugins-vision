@@ -48,7 +48,7 @@
 # [--framerate-min, --framerate-max] (with a lower --framerate-max-boost ceiling
 # at night), so one launch runs the line as fast as the light allows across
 # dawn/dusk with no restart. --no-adaptive-framerate pins it to a fixed rate.
-# See gst/linescan/NIGHT_FPS_TUNING.md.
+# See docs/NIGHT_FPS_TUNING.md.
 #
 # Prerequisites:
 #   - Build the custom plugins: .\build.ps1  (idsueyesrc, intervalometer, linescan)
@@ -248,8 +248,8 @@ Examples:
     parser.add_argument('--boost-min-dwell', type=float, default=120.0, metavar='SEC',
                         help='Min seconds to hold a gain-boost state before it can toggle back '
                              '(anti-chatter at dusk; default: 120)')
-    parser.add_argument('--gain-max', type=int, default=82, metavar='N',
-                        help='Intervalometer gain ceiling, 1-100 (default: 82). Lower it to cut '
+    parser.add_argument('--gain-max', type=int, default=25, metavar='N',
+                        help='Intervalometer gain ceiling, 1-100 (default: 25). Lower it to cut '
                              'noise - the whole ladder tops out sooner. NOTE: 0 is not "no gain", '
                              'it is the intervalometer sentinel for "use the camera max (100)".')
     parser.add_argument('--gain-max-boost', type=int, default=0, metavar='N',
@@ -578,7 +578,7 @@ Examples:
     # Configure intervalometer. ramp-rate=slow keeps the diurnal brightness ramp
     # smooth; the --mode seed above lands near the operating point so a cold
     # start still converges quickly despite the slow ramp. gain-max=82 is the
-    # night ceiling (see gst/linescan/NIGHT_FPS_TUNING.md); above it, gain-boost
+    # night ceiling (see docs/NIGHT_FPS_TUNING.md); above it, gain-boost
     # takes over as the third rung.
     iv_ramp_rate = "slow"
     iv_update_interval = 1000
@@ -601,7 +601,7 @@ Examples:
 
     # Adaptive framerate = 4th rung (exposure -> gain -> gain-boost -> framerate).
     # Only engages once the first three are pinned, so it never perturbs the
-    # normal diurnal ramp until that ramp hits a rail. See NIGHT_FPS_TUNING.md.
+    # normal diurnal ramp until that ramp hits a rail. See docs/NIGHT_FPS_TUNING.md.
     if adaptive_fps:
         intervalometer.set_property("framerate-min", float(args.framerate_min))
         intervalometer.set_property("framerate-max", float(args.framerate_max))
