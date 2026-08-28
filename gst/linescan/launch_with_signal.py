@@ -412,8 +412,12 @@ Examples:
     intervalometer.set_property("target-brightness", 80.0)
     intervalometer.set_property("log-file", "timelapse.csv")
 
-    # Rotate 90 degrees counter-clockwise (method=1 clockwise, method=3 CCW)
-    videoflip.set_property("method", 3)
+    # Rotate 90 degrees. The two cameras are mounted with opposite handedness,
+    # so the rotation direction depends on which one we're reading:
+    #   device-id 1 -> method=3 (CCW 90)
+    #   device-id 2 -> method=1 (CW 90)
+    flip_method = 1 if device_id == 2 else 3
+    videoflip.set_property("method", flip_method)
 
     # Configure linescan: extract a vertical column per frame, stack horizontally
     linescan.set_property("direction", 1)  # vertical
@@ -421,8 +425,8 @@ Examples:
 
     if args.debug:
         print(f"Recording output directory: {output_dir}")
-        print(f"Camera rotated 90 CCW, then vertical linescan with output-size={output_size} "
-              f"(aspect {args.aspect})")
+        print(f"Camera rotated 90 (videoflip method={flip_method}), then vertical linescan "
+              f"with output-size={output_size} (aspect {args.aspect})")
 
     # Connect rollover signal
     linescan.connect("rollover", on_rollover)
