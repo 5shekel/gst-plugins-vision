@@ -222,12 +222,18 @@ Examples:
                         help='Set GStreamer debug level (0-9, default: 3 if --gst-debug)')
     parser.add_argument('--output-dir', '-o', metavar='DIR',
                         help='Output directory (default: results/<date>/<funny-name>)')
+    parser.add_argument('--log-file', metavar='CSV',
+                        help='Intervalometer CSV log path (default: timelapse_<date>.csv). '
+                             'Opened in append mode - one row per update-interval, restarts '
+                             'keep history.')
     parser.add_argument('--config', '-c', default=DEFAULT_CONFIG, metavar='INI',
                         help=f'Camera config .ini (default: {DEFAULT_CONFIG})')
     parser.add_argument('--mode', '-m', choices=['day', 'night'], default='day',
                         help='Camera mode: day (0.02ms exposure, 0 gain, gain-boost off) or '
-                             'night (5.25ms exposure, 65 gain, gain-boost on) (default: day). '
-                             'Only a seed - the intervalometer takes over within seconds.')
+                             'night (5ms exposure, 68 gain, gain-boost on) (default: day). '
+                             'Only a seed - the intervalometer takes over within seconds; '
+                             'the night seed is placed at the measured operating point so a '
+                             'night (re)start converges fast instead of walking the slow ramp.')
     parser.add_argument('--auto-gain-boost', action=argparse.BooleanOptionalAction, default=True,
                         help='Let the intervalometer toggle the camera gain-boost as a third '
                              'rung (exposure -> gain -> gain-boost) so dawn/dusk needs no restart '
@@ -235,6 +241,15 @@ Examples:
     parser.add_argument('--boost-min-dwell', type=float, default=120.0, metavar='SEC',
                         help='Min seconds to hold a gain-boost state before it can toggle back '
                              '(anti-chatter at dusk; default: 120)')
+    parser.add_argument('--gain-max', type=int, default=82, metavar='N',
+                        help='Intervalometer gain ceiling, 1-100 (default: 82). Lower it to cut '
+                             'noise - the whole ladder tops out sooner. NOTE: 0 is not "no gain", '
+                             'it is the intervalometer sentinel for "use the camera max (100)".')
+    parser.add_argument('--gain-max-boost', type=int, default=0, metavar='N',
+                        help='Separate, lower gain ceiling that applies only while gain-boost is '
+                             'on (0 = disabled, use --gain-max in both states). Lets gain still '
+                             'climb high at dusk to delay boost, then stay capped once boosted so '
+                             'boost x gain does not blow up the noise. Try ~40.')
     parser.add_argument('--framerate', '-r', type=int, default=200, metavar='FPS',
                         help='Camera framerate in fps (default: 200)')
     parser.add_argument('--device-id', type=int, default=1, metavar='ID',
@@ -266,6 +281,15 @@ Examples:
                         help='Throttle the preview branch to this framerate (default: 30)')
 
     args = parser.parse_args()
+
+    # gain-max=0 is the intervalometer's "query from camera" sentinel (-> 100),
+    # never a real limit. Reject it here so it can't silently mean "no cap".
+    if args.gain_max < 1:
+        parser.error("--gain-max must be >= 1 (0 means 'use camera max' inside the "
+                     "intervalometer, which is the opposite of a limit)")
+    if args.gain_max_boost and args.gain_max_boost >= args.gain_max:
+        parser.error(f"--gain-max-boost ({args.gain_max_boost}) must be below --gain-max "
+                     f"({args.gain_max}) to have any effect")
 
     # Resolve emit-every: "auto" tracks the preview cadence so downstream only
     # sees ~--display-fps roll buffers/s regardless of camera framerate.
@@ -452,15 +476,31 @@ Examples:
     else:
         source.set_property("config-file", args.config)
 
-    # Set camera parameters based on mode
+    # Set camera parameters based on mode. These are only a seed - the
+    # intervalometer overrides exposure/gain/gain-boost within seconds.
     if args.mode == 'day':
         exposure = 0.02
         gain = 0
         gain_boost = False
     else:  # night
+        # Measured 200 fps night operating point: exposure pinned at the
+        # 1/framerate cap (~4.96 ms; 5.25 sits above it so idsueyesrc clamps it
+        # there at once), gain ~68, gain-boost on. Seeding here means a night
+        # start or a mid-night restart converges in seconds rather than crawling
+        # the slow ramp up from a dark day seed (~18 min from exposure 0.02).
         exposure = 5.25
-        gain = 65
+        gain = 68
         gain_boost = True
+
+    # Clamp the seed to the ceiling the intervalometer will enforce, so the
+    # camera never physically starts above the limit (otherwise the control loop
+    # spends ~tens of seconds ramping the mode seed back down).
+    seed_ceiling = args.gain_max
+    if gain_boost and args.gain_max_boost > 0:
+        seed_ceiling = min(seed_ceiling, args.gain_max_boost)
+    gain_seed_clamped = gain > seed_ceiling
+    if gain_seed_clamped:
+        gain = seed_ceiling
 
     framerate = args.framerate
     device_id = args.device_id
@@ -478,17 +518,29 @@ Examples:
         print(f"Camera settings: exposure={exposure}ms, framerate={framerate}fps, gain={gain}, "
               f"gain-boost={gain_boost}, device-id={device_id}")
 
-    # Configure intervalometer
+    # Configure intervalometer. ramp-rate=slow keeps the diurnal brightness ramp
+    # smooth; the --mode seed above lands near the operating point so a cold
+    # start still converges quickly despite the slow ramp. gain-max=82 is the
+    # night ceiling (see gst/linescan/NIGHT_FPS_TUNING.md); above it, gain-boost
+    # takes over as the third rung.
+    iv_ramp_rate = "slow"
+    iv_update_interval = 1000
+    iv_target_brightness = 80.0
+    iv_gain_max = args.gain_max
     intervalometer.set_property("enabled", True)
     intervalometer.set_property("camera-element", "source")
-    intervalometer.set_property("ramp-rate", "slow")
-    intervalometer.set_property("update-interval", 1000)
+    intervalometer.set_property("ramp-rate", iv_ramp_rate)
+    intervalometer.set_property("update-interval", iv_update_interval)
     intervalometer.set_property("brightness-deadband", 10.0)
-    intervalometer.set_property("gain-max", 82)
-    intervalometer.set_property("target-brightness", 80.0)
-    intervalometer.set_property("log-file", "timelapse.csv")
+    intervalometer.set_property("gain-max", iv_gain_max)
+    intervalometer.set_property("target-brightness", iv_target_brightness)
+    log_file = args.log_file or f"timelapse_{datetime.now().strftime('%Y%m%d')}.csv"
+    intervalometer.set_property("log-file", log_file)
+    intervalometer.set_property("log-append", True)
     intervalometer.set_property("auto-gain-boost", args.auto_gain_boost)
     intervalometer.set_property("boost-min-dwell", args.boost_min_dwell)
+    if args.gain_max_boost > 0:
+        intervalometer.set_property("gain-max-boost", args.gain_max_boost)
 
     # Rotate 90 degrees. The two cameras are mounted with opposite handedness,
     # so the rotation direction depends on which one we're reading:
@@ -574,9 +626,11 @@ Examples:
 
     # Enable debug for linescan if requested
     if args.debug or args.gst_debug:
-        Gst.debug_set_threshold_for_name("linescan", Gst.DebugLevel.LOG)
+        # DEBUG, not LOG: keeps "Rollover occurred" but drops the per-frame
+        # "output dropped" / "Processed frame" spam from emit-every decimation.
+        Gst.debug_set_threshold_for_name("linescan", Gst.DebugLevel.DEBUG)
         if args.debug:
-            print("Enabled LOG level debugging for linescan element")
+            print("Enabled DEBUG level logging for linescan element")
 
     # Set up message handling before starting
     bus = pipeline.get_bus()
@@ -587,8 +641,22 @@ Examples:
         print("\nStarting pipeline...")
         print(f"Pipeline state: {pipeline.get_state(0)[1].value_nick}")
 
-    # Start pipeline
-    print(f"JPEG frames will be written to: {output_dir}/")
+    # Start pipeline - always echo the resolved config so it is obvious at a
+    # glance whether e.g. --mode night was actually passed.
+    boost_txt = (f"auto (dwell {args.boost_min_dwell:g}s)"
+                 if args.auto_gain_boost else "static (from --mode seed)")
+    print(f"linescan recorder  |  mode={args.mode}  |  {framerate} fps  |  device-id={device_id}")
+    print(f"  camera seed   : exposure={exposure} ms, gain={gain}, gain-boost={gain_boost}")
+    gain_max_txt = (f"{iv_gain_max}" if args.gain_max_boost <= 0
+                    else f"{iv_gain_max} ({args.gain_max_boost} while boosted)")
+    print(f"  intervalometer: target-brightness={iv_target_brightness:g}, gain-max={gain_max_txt}, "
+          f"ramp-rate={iv_ramp_rate}, gain-boost={boost_txt}")
+    print(f"  linescan      : output-size={output_size}, emit-every={emit_every}"
+          f"{' (preview off)' if not args.preview else ''}")
+    print(f"  writing JPEGs : {output_dir}/")
+    print(f"  csv log       : {log_file} (append, 1 row / {iv_update_interval} ms)")
+    if args.mode == 'day':
+        print("  note: 'day' seed in the dark takes ~18 min to ramp up; use --mode night at night")
     print("Press Ctrl+C to stop\n")
 
     ret = pipeline.set_state(Gst.State.PLAYING)

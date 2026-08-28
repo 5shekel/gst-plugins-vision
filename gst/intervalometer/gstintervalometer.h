@@ -72,12 +72,14 @@ struct _GstIntervalometer
   gint gain_max;                 /* Maximum gain (0-100) */
   GstIntervalometerRampRate ramp_rate;
   gchar *log_file;               /* CSV log file path */
+  gboolean log_append;           /* Open log_file in append mode (keep history across restarts) */
   gchar *camera_element_name;    /* Name of upstream idsueyesrc element */
   guint update_interval;         /* Update interval in milliseconds */
   gdouble brightness_smoothing;  /* Brightness smoothing factor (0-1, 0=no smoothing) */
   gdouble brightness_deadband;   /* Deadband zone to prevent oscillation (0=disabled) */
   gboolean auto_gain_boost;      /* Toggle camera gain-boost as a third rung below exposure+gain */
   gdouble boost_min_dwell;       /* Minimum seconds between gain-boost toggles (anti-chatter) */
+  gint gain_max_boost;           /* Gain ceiling while gain-boost is active (0 = use gain_max) */
 
   /* Internal state */
   GstElement *camera_src;        /* Reference to upstream camera element */

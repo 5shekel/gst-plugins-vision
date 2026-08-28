@@ -1,6 +1,11 @@
 # Line-scan FPS / Exposure Tuning — Day & Night Findings
 
-**Date:** 2026-08-28
+**Bench date:** 2026-08-28 (measurement tables below are from that session).
+**Last refreshed:** 2026-08-28 — folded in `emit-every`, `auto-gain-boost`, and the
+gain-cap knobs (`--gain-max` / `--gain-max-boost` + hard ceiling enforcement) that
+were built and verified on-rig the same night. Code is the source of truth; git log
+has anything newer than this file.
+
 **Rig:** IDS uEye line-scan camera, `device-id=1`, `ini/roi-dusk.ini`
 **Pipeline:** idsueyesrc → intervalometer → videoflip → linescan → …
 (bench: `gst/linescan/print_camera_cli.py`; production: `gst/linescan/launch_with_signal.py`)
@@ -31,14 +36,21 @@
 - **With `gain-boost=true` the target band (70–90) is met from 100 up to ~300 fps.**
   Roughly doubles sensitivity.
 - **Best night operating point: `--framerate 200` + gain-boost on.** ≈160 fps (the
-  sensor ceiling), exposure auto-caps ~4.96 ms, gain settles ~69/82 with margin,
-  brightness ~78.
+  sensor ceiling), exposure auto-caps ~4.96 ms, gain settles ~68 with margin,
+  brightness ~78. Confirmed on-rig: `auto-gain-boost` engages at exactly this point
+  (exposure at cap, gain hits `gain-max`, still dark) and converges there in seconds.
 - Gain-boost degrades image quality and is wrong for daytime — it is **not** set in
   `roi-dusk.ini` (that ini is shared by the day launch). Instead:
   - **`print_camera_cli.py`** emits `gain-boost=true` only for `--mode night` (bench).
   - **`launch_with_signal.py`** seeds `gain-boost` from `--mode`, and by default
     (`--auto-gain-boost`) hands ongoing control to the intervalometer, which
     toggles it as the third rung of its ladder — see [Running for months](#running-for-months--seamless-daynight-operation).
+- **Boost ≈ 2× is often too much gain.** With boost on, gain ramping back up to
+  `gain-max=82` runs the noise floor up. Cap it: `--gain-max N` (whole ladder tops
+  out sooner) or `--gain-max-boost N` (separate, lower ceiling that only applies
+  while boosted — lets gain still climb high at dusk to *delay* the boost). The
+  intervalometer enforces the cap on the seed, on restart, and every update — gain
+  is never commanded above it. See [Params](#params-no-rebuild).
 
 ### Day (pipeline-limited)
 
@@ -58,8 +70,10 @@
 - **Done:** gain-boost is now the intervalometer's third rung (exposure → gain →
   gain-boost) via `auto-gain-boost` (on by default in `launch_with_signal.py`), so
   dawn/dusk needs no manual mode switch or restart.
-- **Still open:** `timelapse.csv` grows ~0.5 GB/day (logged every frame) and is wiped
-  on restart — must be fixed for a long run.
+- **Done:** `timelapse.csv` no longer grows ~0.5 GB/day or wipes on restart — the
+  intervalometer logs one row per `update-interval` (~3 MB/day), and
+  `launch_with_signal.py` writes a dated `timelapse_<date>.csv` in `log-append=true`
+  mode.
 
 ---
 
@@ -81,20 +95,28 @@ The `new_fps` out-param (the rate the sensor can actually sustain) is **discarde
 so requesting more than the sensor can deliver is silent — you just get a shorter
 exposure cap.
 
-### `intervalometer` adjusts exposure + gain only
+### `intervalometer` owns exposure, gain, and gain-boost
 
 `gst_intervalometer_update_camera_settings()`
-([`gst/intervalometer/gstintervalometer.c:704-796`](../intervalometer/gstintervalometer.c#L704-L796)):
-when too dark it raises exposure first (up to `exposure-max`), then gain (up to
-`gain-max`). It never touches framerate and has no gain-boost property.
+([`gst/intervalometer/gstintervalometer.c`](../intervalometer/gstintervalometer.c),
+`gst_intervalometer_update_camera_settings` / `gst_intervalometer_toggle_gain_boost`):
+a three-rung ladder. Too dark → raise exposure (up to `exposure-max`), then gain (up
+to the effective ceiling), then, if `auto-gain-boost` is on and both are pinned,
+enable `gain-boost` (and recentre gain). Too bright → the mirror. It never touches
+framerate.
 
-`exposure-max` was left unset in `print_camera_cli.py`, so it is auto-queried from
-the camera at startup — and the queried value already equals `1/fps` exactly
-(9.96 / 6.62 / 4.96 ms at 100 / 150 / 200 fps), so the controller's model matched
-the hardware. No explicit `exposure-max` needed.
+- **Effective gain ceiling** = `gain-max`, or the lower `gain-max-boost` while boost
+  is active (`gain_max_boost=0` disables the split). `gst_intervalometer_effective_gain_max()`.
+  Enforced as a hard snap-down in `gst_intervalometer_reset()` and at the top of
+  every `update_camera_settings()` call, so the camera is never commanded above it —
+  not even transiently while ramping down from a `--mode` seed.
+- **`exposure-max`** is left unset in both launchers, so it is auto-queried from the
+  camera at startup — and the queried value already equals `1/fps` exactly (9.96 /
+  6.62 / 4.96 ms at 100 / 150 / 200 fps), so the controller's model matches the
+  hardware. No explicit `exposure-max` needed.
 
-The CSV logs the controller's *belief* (`filter->current_exposure`), not the camera
-readback ([`:817-823`](../intervalometer/gstintervalometer.c#L817-L823)). They agreed
+The CSV logs the controller's *belief* (`filter->current_exposure` / `current_gain` /
+`boost_active`), not a camera readback (`gst_intervalometer_write_log()`). They agreed
 in these tests, but that is not guaranteed at the clamp boundary.
 
 ---
@@ -154,7 +176,18 @@ Confirmed working at runtime: log shows `idsueyesrc … Gain boost enabled`
   line rate (brightness ~73 with boost, gain still at its floor).
 - `target-brightness=80` is unreachable without boost — with boost it is met; leaving
   it at 80 is fine.
-- Optional: raise `gain-max` toward 100 for ~+20 % brightness at the cost of noise.
+- **`--gain-max N`** (default 82) caps the whole ladder lower — use it if night
+  images are simply too noisy. `--gain-max 0` is **rejected** by the launcher: 0 is
+  the intervalometer's "query the limit from the camera" sentinel (→ 100), i.e. the
+  opposite of a cap.
+- **`--gain-max-boost N`** (default 0 = off) is a *second, lower* ceiling that only
+  applies while `gain-boost` is on: gain still climbs to `--gain-max` at dusk (delays
+  the boost), then can't exceed `N` once boosted, so `boost × gain` doesn't blow up
+  the noise floor. Rule of thumb: boost ≈ 2×, so `--gain-max-boost 40` ≈ the light of
+  unboosted gain 80. Tune from `timelapse.csv` — find the `Gain` value where boosted
+  frames got unacceptable, set the cap below it.
+- Raising `gain-max` toward 100 buys ~+20 % brightness at the cost of noise — the
+  opposite trade from the two knobs above.
 - To lift the ~150–160 fps ROI ceiling itself, edit `roi-dusk.ini` (pixel clock /
   ROI height) — not the pipeline.
 
@@ -166,8 +199,9 @@ noise. So it is set from `--mode` in the launchers instead:
 
 - **`print_camera_cli.py`** (`build_command()`): emits `gain-boost=false` for
   `--mode day`, `gain-boost=true` for `--mode night`.
-- **`launch_with_signal.py`**: same `--mode` seed on `idsueyesrc`, then the
-  intervalometer owns it at runtime (next section).
+- **`launch_with_signal.py`**: same `--mode` seed on `idsueyesrc` (clamped to
+  `--gain-max` / `--gain-max-boost` before it is written, so the camera never
+  *starts* above the cap), then the intervalometer owns it at runtime (next section).
 
 ### Optional `.c` changes (only if this becomes routine tuning)
 
@@ -190,8 +224,8 @@ launch** and only seeds `exposure`/`gain`/`gain-boost`; the intervalometer overr
 all three within seconds and then handles the whole diurnal brightness ramp on its
 own (that part is already seamless — it is what the element is for).
 
-Of the three things that were **not** seamless for a months-long run, #1 is now
-done; #2 and #3 remain.
+Of the three things that were **not** seamless for a months-long run: #1 (gain-boost)
+and #2 (`timelapse.csv`) are done; #3 is just standing advice.
 
 ### 1. Gain-boost as the intervalometer's third rung — done
 
@@ -219,25 +253,45 @@ Implemented in `gst_intervalometer_update_camera_settings()` /
 - Hysteresis: existing `update-interval` (1 s) + `brightness-deadband` (10) +
   `ramp-rate=slow`, plus the "both rails pinned before toggling" rule and
   `boost-min-dwell`.
+- On enable, gain recentres against the *boosted* ceiling (`gain-max-boost` if set),
+  so it drops out of the noisy top of the range in one step.
 - The CSV gained a trailing `GainBoost` column.
 
 `launch_with_signal.py` sets `auto-gain-boost` (default on, `--no-auto-gain-boost`
-to disable) and `boost-min-dwell` (`--boost-min-dwell`). The `--mode` gain-boost
-bit is now just the startup seed. `print_camera_cli.py` (bench) does **not** enable
-`auto-gain-boost` — it keeps the static `--mode` seed for deterministic runs.
+to disable), `boost-min-dwell` (`--boost-min-dwell`), `gain-max` (`--gain-max`), and
+`gain-max-boost` (`--gain-max-boost`). The `--mode` gain-boost bit is now just the
+startup seed. `print_camera_cli.py` (bench) does **not** enable `auto-gain-boost` —
+it keeps the static `--mode` seed for deterministic runs.
 
-### 2. `timelapse.csv` grows without bound
+**On-rig verification (2026-08-28 night):** from a `gain-boost=false` seed with
+exposure/gain seeded near the cap, the loop pinned exposure at 4.96 ms, ramped gain
+78→82, then fired rung 3 — `Auto gain-boost ENABLED (brightness rung 3); gain
+recentred to 41`, camera `gain-boost = true` — and settled at gain ~68 / brightness
+~76 with no chatter. Separately confirmed `--gain-max 40` snaps a 68-seed down to 40
+immediately rather than ramping through over-cap values.
 
-`gst_intervalometer_write_log()` is called **every frame** and `fflush`es every frame
-([`gstintervalometer.c:589-592`](../intervalometer/gstintervalometer.c#L589-L592),
-[`:817-825`](../intervalometer/gstintervalometer.c#L817-L825)). At ~160 fps that is
-~13.8 M rows/day (~0.5 GB/day, ~160 fsync/s) — untenable over months. The path is
-also a fixed relative `timelapse.csv` opened `"w"`, so every restart wipes history.
+### 2. `timelapse.csv` growth + restart-wipe — done
 
-Fix (small): move the `write_log()` call **inside** the `if (should_update)` block so
-it logs once per `update-interval` (1 Hz → ~3 MB/day). Also make the path a property
-and open `"a"`, or have `launch_with_signal.py` pass a dated filename
-(`timelapse_YYYYMMDD.csv`).
+Was: `gst_intervalometer_write_log()` ran from `transform_ip()` **every frame** with
+an `fflush` each time (~13.8 M rows/day, ~0.5 GB/day, ~160 fsync/s at 160 fps), into
+a fixed `timelapse.csv` opened `"w"` so every restart wiped it.
+
+Now:
+
+- The `write_log()` call moved **inside the `if (should_update)` block** in
+  `transform_ip()` — one row per `update-interval` (1 Hz → ~86 k rows/day, ~3 MB/day).
+  The per-row `fflush` stays (1 fsync/s is nothing) so live tailing still works.
+- New **`log-append`** property (bool, default FALSE = old truncate behaviour). When
+  TRUE, `start()` opens `"a"` and only writes the CSV header if the file is empty
+  (`fseek`/`ftell` check).
+- `launch_with_signal.py` now defaults the log to **`timelapse_<YYYYMMDD>.csv`**
+  (override with `--log-file`) and sets `log-append=true`, so a restart or a
+  supervised relaunch appends instead of starting over. One file per day.
+- `print_camera_cli.py` (bench) is unchanged: still `log-file=timelapse.csv`, no
+  append — deterministic per-run files.
+
+Verified: 90 frames over 3 s at `update-interval=500` → 6 rows (one per 0.5 s), and a
+second run against the same file appended with a single header.
 
 ### 3. Framerate at night: leave it at 200
 
@@ -254,8 +308,9 @@ The camera is not the 200 fps limit. `ini/roi-dusk.ini` was captured at
 **1312 fps** (`[Timing] Framerate=1312.056738`, `Pixelclock=474`, ROI 2016×20), and
 daytime exposure (~0.02–1.25 ms) never constrains fps.
 
-**The recorder pipeline caps at ~180 fps**, and it is
-[`gstlinescan.c:623`](gstlinescan.c#L623):
+**The recorder pipeline caps at ~180 fps**, and it is the full-roll copy in
+`gst_linescan_transform()` ([`gstlinescan.c`](gstlinescan.c), the
+`memcpy (map_out.data, filter->line_buffer, map_out.size)` line):
 
 ```c
 memcpy (map_out.data, filter->line_buffer, map_out.size);
@@ -344,8 +399,9 @@ cannot verify: image brightness at 800 fps in daylight, where exposure is capped
 
 ## Live monitoring
 
-- `Get-Content timelapse.csv -Wait -Tail 20` — CSV is `fflush`ed per frame; watch
-  brightness / exposure / gain converge in real time.
+- `Get-Content timelapse_<date>.csv -Wait -Tail 20` — one row per `update-interval`
+  (~1 Hz), `fflush`ed each write; watch brightness / exposure / gain / GainBoost
+  converge in real time.
 - Startup line `intervalometer … Queried exposure_max: N ms` — the key diagnostic;
   equals `1/fps` when framerate is achievable.
 - `GST_DEBUG=idsueyesrc:5` — per-set exposure clamp messages

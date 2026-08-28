@@ -48,8 +48,9 @@ def build_command(args):
         # Night is light-limited: gain-boost roughly doubles sensitivity and the
         # scene is too dark without it at every framerate. roi-dusk.ini is shared
         # with the day launch, so gate it here on --mode, not in the ini.
+        # Seed matches launch_with_signal.py's measured 200 fps operating point.
         exposure = 5.25
-        gain = 65
+        gain = 68
         gain_boost = "true"
 
     output_size = resolve_output_size(args)

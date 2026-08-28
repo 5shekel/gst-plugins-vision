@@ -60,12 +60,14 @@ enum
   PROP_GAIN_MAX,
   PROP_RAMP_RATE,
   PROP_LOG_FILE,
+  PROP_LOG_APPEND,
   PROP_CAMERA_ELEMENT,
   PROP_UPDATE_INTERVAL,
   PROP_BRIGHTNESS_SMOOTHING,
   PROP_BRIGHTNESS_DEADBAND,
   PROP_AUTO_GAIN_BOOST,
-  PROP_BOOST_MIN_DWELL
+  PROP_BOOST_MIN_DWELL,
+  PROP_GAIN_MAX_BOOST
 };
 
 #define DEFAULT_PROP_ENABLED TRUE
@@ -77,12 +79,14 @@ enum
 #define DEFAULT_PROP_GAIN_MAX 0        /* Will be queried from camera */
 #define DEFAULT_PROP_RAMP_RATE RAMP_RATE_MEDIUM
 #define DEFAULT_PROP_LOG_FILE ""
+#define DEFAULT_PROP_LOG_APPEND FALSE  /* truncate on open, as before */
 #define DEFAULT_PROP_CAMERA_ELEMENT ""
 #define DEFAULT_PROP_UPDATE_INTERVAL 100  /* Update every 100ms (10 Hz) */
 #define DEFAULT_PROP_BRIGHTNESS_SMOOTHING 0.1  /* 10% new, 90% history - heavy smoothing for time-lapse */
 #define DEFAULT_PROP_BRIGHTNESS_DEADBAND 10.0  /* ±10 brightness units deadband zone */
 #define DEFAULT_PROP_AUTO_GAIN_BOOST FALSE     /* Off by default - opt in for unattended dawn/dusk runs */
 #define DEFAULT_PROP_BOOST_MIN_DWELL 120.0     /* Hold a gain-boost state >=2 min before toggling back */
+#define DEFAULT_PROP_GAIN_MAX_BOOST 0          /* 0 = while boosted, keep using gain_max */
 
 /* GStreamer boilerplate */
 #define gst_intervalometer_parent_class parent_class
@@ -147,6 +151,8 @@ static void gst_intervalometer_update_camera_settings (GstIntervalometer * filte
     gdouble brightness);
 static gboolean gst_intervalometer_toggle_gain_boost (GstIntervalometer * filter,
     gboolean enable);
+static gint gst_intervalometer_effective_gain_max (GstIntervalometer * filter,
+    gboolean boosted);
 static void gst_intervalometer_write_log (GstIntervalometer * filter,
     gdouble brightness);
 static GstElement * gst_intervalometer_find_camera_element (GstIntervalometer * filter);
@@ -226,8 +232,17 @@ gst_intervalometer_class_init (GstIntervalometerClass * klass)
 
   g_object_class_install_property (gobject_class, PROP_LOG_FILE,
       g_param_spec_string ("log-file", "Log File",
-          "Path to CSV log file (empty to disable logging)",
+          "Path to CSV log file (empty to disable logging). One row is written per "
+          "update-interval, not per frame",
           DEFAULT_PROP_LOG_FILE,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (gobject_class, PROP_LOG_APPEND,
+      g_param_spec_boolean ("log-append", "Log Append",
+          "Open log-file in append mode and keep history across restarts (the CSV "
+          "header is only written when the file is empty). Default FALSE truncates "
+          "on open",
+          DEFAULT_PROP_LOG_APPEND,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_CAMERA_ELEMENT,
@@ -276,6 +291,15 @@ gst_intervalometer_class_init (GstIntervalometerClass * klass)
           0.0, 3600.0, DEFAULT_PROP_BOOST_MIN_DWELL,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+  g_object_class_install_property (gobject_class, PROP_GAIN_MAX_BOOST,
+      g_param_spec_int ("gain-max-boost", "Gain Max While Boosted",
+          "Gain ceiling that replaces gain-max while gain-boost is active (0 = keep "
+          "using gain-max in both states). Lets gain climb high at dusk to delay the "
+          "boost, then stay capped once boosted so boost x gain doesn't blow up the "
+          "noise floor. Only used when auto-gain-boost is enabled",
+          0, 1000, DEFAULT_PROP_GAIN_MAX_BOOST,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
   /* Set element metadata */
   gst_element_class_add_pad_template (gstelement_class,
       gst_static_pad_template_get (&gst_intervalometer_sink_template));
@@ -309,12 +333,14 @@ gst_intervalometer_init (GstIntervalometer * filter)
   filter->gain_max = DEFAULT_PROP_GAIN_MAX;
   filter->ramp_rate = DEFAULT_PROP_RAMP_RATE;
   filter->log_file = g_strdup (DEFAULT_PROP_LOG_FILE);
+  filter->log_append = DEFAULT_PROP_LOG_APPEND;
   filter->camera_element_name = g_strdup (DEFAULT_PROP_CAMERA_ELEMENT);
   filter->update_interval = DEFAULT_PROP_UPDATE_INTERVAL;
   filter->brightness_smoothing = DEFAULT_PROP_BRIGHTNESS_SMOOTHING;
   filter->brightness_deadband = DEFAULT_PROP_BRIGHTNESS_DEADBAND;
   filter->auto_gain_boost = DEFAULT_PROP_AUTO_GAIN_BOOST;
   filter->boost_min_dwell = DEFAULT_PROP_BOOST_MIN_DWELL;
+  filter->gain_max_boost = DEFAULT_PROP_GAIN_MAX_BOOST;
 
   /* Initialize internal state */
   filter->camera_src = NULL;
@@ -375,6 +401,9 @@ gst_intervalometer_set_property (GObject * object, guint prop_id,
       g_free (filter->log_file);
       filter->log_file = g_value_dup_string (value);
       break;
+    case PROP_LOG_APPEND:
+      filter->log_append = g_value_get_boolean (value);
+      break;
     case PROP_CAMERA_ELEMENT:
       g_free (filter->camera_element_name);
       filter->camera_element_name = g_value_dup_string (value);
@@ -397,6 +426,9 @@ gst_intervalometer_set_property (GObject * object, guint prop_id,
       break;
     case PROP_BOOST_MIN_DWELL:
       filter->boost_min_dwell = g_value_get_double (value);
+      break;
+    case PROP_GAIN_MAX_BOOST:
+      filter->gain_max_boost = g_value_get_int (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -438,6 +470,9 @@ gst_intervalometer_get_property (GObject * object, guint prop_id,
     case PROP_LOG_FILE:
       g_value_set_string (value, filter->log_file);
       break;
+    case PROP_LOG_APPEND:
+      g_value_set_boolean (value, filter->log_append);
+      break;
     case PROP_CAMERA_ELEMENT:
       g_value_set_string (value, filter->camera_element_name);
       break;
@@ -455,6 +490,9 @@ gst_intervalometer_get_property (GObject * object, guint prop_id,
       break;
     case PROP_BOOST_MIN_DWELL:
       g_value_set_double (value, filter->boost_min_dwell);
+      break;
+    case PROP_GAIN_MAX_BOOST:
+      g_value_set_int (value, filter->gain_max_boost);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -501,13 +539,20 @@ gst_intervalometer_start (GstBaseTransform * trans)
   filter->frame_count = 0;
   filter->start_time = gst_clock_get_time (gst_system_clock_obtain ());
 
-  /* Open log file if specified */
+  /* Open log file if specified. Append mode keeps history across restarts; the
+   * CSV header is then only written when the file starts out empty. */
   if (filter->log_file && strlen (filter->log_file) > 0) {
-    filter->log_fp = fopen (filter->log_file, "w");
+    filter->log_fp = fopen (filter->log_file, filter->log_append ? "a" : "w");
     if (!filter->log_fp) {
       GST_WARNING_OBJECT (filter, "Failed to open log file: %s", filter->log_file);
     } else {
-      filter->log_header_written = FALSE;
+      long pos = 0;
+      if (fseek (filter->log_fp, 0, SEEK_END) == 0)
+        pos = ftell (filter->log_fp);
+      filter->log_header_written = (filter->log_append && pos > 0);
+      GST_INFO_OBJECT (filter, "Logging to %s (%s, header %s)", filter->log_file,
+          filter->log_append ? "append" : "truncate",
+          filter->log_header_written ? "already present" : "will write");
     }
   }
 
@@ -619,21 +664,35 @@ gst_intervalometer_transform_ip (GstBaseTransform * trans, GstBuffer * buf)
         ((1.0 - filter->brightness_smoothing) * filter->smoothed_brightness);
   }
 
-  /* Only update camera settings at the specified interval */
+  /* Update camera settings, and log a CSV row, only at the specified interval.
+   * Per-frame logging at ~160 fps was ~0.5 GB/day plus an fsync per frame. */
   if (should_update) {
     /* Use smoothed brightness to filter out transient object movements */
     gst_intervalometer_update_camera_settings (filter, filter->smoothed_brightness);
     filter->last_update_time = now;
-  }
 
-  /* Write to log file if enabled */
-  if (filter->log_fp) {
-    gst_intervalometer_write_log (filter, brightness);
+    if (filter->log_fp) {
+      gst_intervalometer_write_log (filter, brightness);
+    }
   }
 
   filter->frame_count++;
 
   return GST_FLOW_OK;
+}
+
+/* Gain ceiling in force right now: gain_max, or the lower gain_max_boost while
+ * boost is (or is about to be) active. gain_max==0 is the "query from camera"
+ * sentinel and means "no explicit cap" -> return it as-is. */
+static gint
+gst_intervalometer_effective_gain_max (GstIntervalometer * filter,
+    gboolean boosted)
+{
+  if (filter->gain_max <= 0)
+    return filter->gain_max;
+  if (boosted && filter->gain_max_boost > 0)
+    return MIN (filter->gain_max_boost, filter->gain_max);
+  return filter->gain_max;
 }
 
 static void
@@ -659,8 +718,20 @@ gst_intervalometer_reset (GstIntervalometer * filter)
 
     /* Get current gain using GObject (gain doesn't have SDK query function) */
     g_object_get (filter->camera_src, "gain", &filter->current_gain, NULL);
-    filter->target_gain = filter->current_gain;
     GST_INFO_OBJECT (filter, "Queried current gain: %d", filter->current_gain);
+    /* Never let the controller start (or restart) above its own ceiling - snap
+     * the camera down immediately rather than ramping to it later. */
+    {
+      gint ceil = gst_intervalometer_effective_gain_max (filter,
+          filter->boost_active);
+      if (ceil > 0 && filter->current_gain > ceil) {
+        GST_INFO_OBJECT (filter, "Queried gain %d over ceiling %d - snapping down",
+            filter->current_gain, ceil);
+        filter->current_gain = ceil;
+        g_object_set (filter->camera_src, "gain", ceil, NULL);
+      }
+    }
+    filter->target_gain = filter->current_gain;
   } else {
     /* Fallback to min values if camera not available */
     filter->current_exposure = filter->exposure_min;
@@ -749,9 +820,23 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
   gdouble error, adjusted_target, exposure_range, gain_range;
   gdouble ramp_multiplier;
   gdouble abs_error;
+  gint eff_gain_max;
 
   if (!filter->camera_src) {
     return;
+  }
+
+  /* Hard gain ceiling, enforced every update before anything else so the camera
+   * is never left (or commanded) above the limit - not even transiently while
+   * ramping down from a seed or a lowered cap. */
+  eff_gain_max = gst_intervalometer_effective_gain_max (filter,
+      filter->boost_active);
+  if (eff_gain_max > 0 && filter->current_gain > eff_gain_max) {
+    GST_INFO_OBJECT (filter, "Gain %d over ceiling %d - snapping down",
+        filter->current_gain, eff_gain_max);
+    filter->current_gain = eff_gain_max;
+    filter->target_gain = eff_gain_max;
+    g_object_set (filter->camera_src, "gain", eff_gain_max, NULL);
   }
 
   /* Calculate brightness error with compensation */
@@ -801,11 +886,13 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
       filter->target_exposure = filter->current_exposure +
           (exposure_range * 0.01 * ramp_multiplier);
       filter->target_exposure = MIN (filter->target_exposure, filter->exposure_max);
-    } else if (filter->current_gain < filter->gain_max) {
+    } else if (filter->current_gain < eff_gain_max) {
       filter->target_gain = filter->current_gain + (gint) (ramp_multiplier);
-      filter->target_gain = MIN (filter->target_gain, filter->gain_max);
+      filter->target_gain = MIN (filter->target_gain, eff_gain_max);
     } else if (filter->auto_gain_boost && !filter->boost_active) {
-      /* Exposure and gain both maxed and still too dark: engage gain-boost. */
+      /* Exposure and gain both maxed and still too dark: engage gain-boost.
+       * (Gain sitting above eff_gain_max is already snapped down at the top of
+       * this function, so "gain maxed" here means at the ceiling.) */
       if (gst_intervalometer_toggle_gain_boost (filter, TRUE))
         return;
     }
@@ -854,7 +941,7 @@ static gboolean
 gst_intervalometer_toggle_gain_boost (GstIntervalometer * filter, gboolean enable)
 {
   GstClockTime now;
-  gint mid_gain;
+  gint mid_gain, ceil_gain;
 
   if (!filter->camera_src) {
     return FALSE;
@@ -877,8 +964,13 @@ gst_intervalometer_toggle_gain_boost (GstIntervalometer * filter, gboolean enabl
   filter->last_boost_toggle_time = now;
 
   /* Recentre gain so the ~2x sensitivity step doesn't jump brightness a full
-   * stop and there is headroom to ramp either direction next update. */
-  mid_gain = filter->gain_min + (filter->gain_max - filter->gain_min) / 2;
+   * stop and there is headroom to ramp either direction next update. When
+   * enabling, recentre against the boosted ceiling so gain also drops out of
+   * the noisy top of its range. */
+  ceil_gain = gst_intervalometer_effective_gain_max (filter, enable);
+  if (ceil_gain <= 0)          /* gain_max not resolved yet - be conservative */
+    ceil_gain = filter->gain_max > 0 ? filter->gain_max : 100;
+  mid_gain = filter->gain_min + (ceil_gain - filter->gain_min) / 2;
   filter->current_gain = mid_gain;
   filter->target_gain = mid_gain;
   g_object_set (filter->camera_src, "gain", mid_gain, NULL);
@@ -897,7 +989,7 @@ gst_intervalometer_write_log (GstIntervalometer * filter, gdouble brightness)
     return;
   }
 
-  /* Write CSV header on first frame */
+  /* Write CSV header once (skipped when appending to a non-empty file) */
   if (!filter->log_header_written) {
     fprintf (filter->log_fp,
         "Frame,Time_s,Brightness,Exposure_ms,Gain,Target_Brightness,GainBoost\n");
@@ -918,6 +1010,8 @@ gst_intervalometer_write_log (GstIntervalometer * filter, gdouble brightness)
       filter->target_brightness,
       filter->boost_active ? 1 : 0);
 
+  /* Flush so `Get-Content -Wait` tails it live. Now that this runs once per
+   * update-interval (~1 Hz) rather than per frame, the fsync cost is trivial. */
   fflush (filter->log_fp);
 }
 
