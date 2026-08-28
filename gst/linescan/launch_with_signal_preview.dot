@@ -1,0 +1,56 @@
+// launch_with_signal.py  (preview branch is on by default; --no-preview drops it)
+//
+// Pipeline built by gst/linescan/launch_with_signal.py with the default preview branch.
+// Render:  dot -Tsvg launch_with_signal_preview.dot -o launch_with_signal_preview.svg
+
+digraph linescan_capture {
+    rankdir=LR;
+    labelloc="t";
+    label="linescan-capture  (launch_with_signal.py, default preview branch)";
+    fontname="Helvetica";
+    node [shape=box, style="rounded,filled", fontname="Helvetica",
+          fillcolor="#eef4ff", color="#4a72b0"];
+    edge [fontname="Helvetica", fontsize=10, color="#555555"];
+
+    // --- capture chain ---
+    source        [label="idsueyesrc\nname=source\ndevice-id / config-file\nexposure / framerate / gain"];
+    intervalometer[label="intervalometer\nenabled=true\ncamera-element=source\nramp-rate=slow"];
+    flip          [label="videoflip\nmethod=1 (dev 1, CW) /\nmethod=3 (dev 2, CCW)"];
+    queue1        [label="queue\nname=queue1", fillcolor="#f3f3f3", color="#999999"];
+    linescan      [label="linescan\ndirection=1 (vertical)\noutput-size=<derived>", fillcolor="#fff2d9", color="#c9922e"];
+    tee           [label="tee", shape=hexagon, fillcolor="#e7ffe7", color="#3f8f3f"];
+
+    // --- branch A: rollover -> JPEG ---
+    queue2        [label="queue\nname=queue2\nmax-size-buffers=3", fillcolor="#f3f3f3", color="#999999"];
+    convert       [label="videoconvert\nname=convert"];
+    videosink     [label="fakesink\nname=videosink\nsync=false", shape=doubleoctagon, fillcolor="#f3f3f3", color="#999999"];
+
+    rollover      [label="\"rollover\" signal\n-> on_rollover()\nImage.save(*.jpg, q=90)", shape=note, fillcolor="#ffe9e9", color="#c05353"];
+    jpeg          [label="results/<date>/<name>/\nlinescan_capture_NNNNNN.jpg", shape=folder, fillcolor="#fff7e6", color="#c9922e"];
+
+    // --- branch B: live preview ---
+    preview_queue   [label="queue\nname=preview_queue", fillcolor="#f3f3f3", color="#999999"];
+    preview_convert [label="videoconvert\nname=preview_convert"];
+    preview_scale   [label="videoscale\nname=preview_scale"];
+    preview_caps    [label="capsfilter\nname=preview_caps\nvideo/x-raw\nwidth=1920, height=1080\npixel-aspect-ratio=1/1", shape=cds, fillcolor="#eaf7ff", color="#3f7fa5"];
+    preview_rate    [label="videorate\nname=preview_rate"];
+    preview_rate_caps [label="capsfilter\nname=preview_rate_caps\nvideo/x-raw\nframerate=30/1", shape=cds, fillcolor="#eaf7ff", color="#3f7fa5"];
+    preview_leaky   [label="queue\nname=preview_leaky\nleaky=downstream\nmax-size-buffers=2", fillcolor="#f3f3f3", color="#999999"];
+    preview_sink    [label="autovideosink\nname=preview_sink\nsync=false", shape=doubleoctagon, fillcolor="#e7ffe7", color="#3f8f3f"];
+
+    // capture chain
+    source -> intervalometer -> flip -> queue1 -> linescan -> tee;
+
+    // branch A
+    tee -> queue2 [label="src_0"];
+    queue2 -> convert -> videosink;
+    linescan -> rollover [style=dashed, color="#c05353", constraint=false];
+    rollover -> jpeg [style=dashed, color="#c05353"];
+
+    // branch B
+    tee -> preview_queue [label="src_1"];
+    preview_queue -> preview_convert -> preview_scale -> preview_caps
+        -> preview_rate -> preview_rate_caps -> preview_leaky -> preview_sink;
+
+    { rank=same; queue2; preview_queue; }
+}

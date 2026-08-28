@@ -10,6 +10,14 @@
 #
 #   idsueyesrc -> intervalometer -> videoflip -> queue -> linescan -> queue -> videoconvert -> fakesink
 #
+# By default a tee is inserted after linescan and a second branch feeds a live
+# video sink (scaled to --display-size, throttled to --display-fps), mirroring
+# the preview chain that print_camera_cli.py emits. Pass --no-preview for the
+# bare recorder-only pipeline.
+#
+#   linescan -> tee -+-> queue -> videoconvert -> fakesink        (rollover -> JPEG)
+#                    +-> queue -> videoconvert -> videoscale -> videorate -> queue(leaky) -> autovideosink
+#
 # linescan accumulates one column per camera frame into an `output-size`-wide
 # image. On every buffer rollover the "rollover" signal fires and on_rollover()
 # writes the accumulated image out as a JPEG.
@@ -201,6 +209,7 @@ Examples:
   %(prog)s --config ini/roi-night.ini         # Use a different camera config
   %(prog)s --output-dir my_captures           # Custom output directory
   %(prog)s --run-seconds 20 --debug           # Timed verification run
+  %(prog)s --no-preview                       # Recorder only, no live video sink
   %(prog)s --gst-debug                        # Enable GStreamer debug
         '''
     )
@@ -229,6 +238,17 @@ Examples:
                         help='Lines to accumulate before rollover = image width (default: derived from --aspect and the ROI)')
     parser.add_argument('--run-seconds', type=int, metavar='N',
                         help='Run for N seconds, then stop cleanly (useful for verification runs)')
+    parser.add_argument('--preview', action=argparse.BooleanOptionalAction, default=True,
+                        help='Tee the linescan output to a live video sink as well as the JPEG '
+                             'recorder (default: on; --no-preview for recorder only)')
+    parser.add_argument('--preview-sink', default='autovideosink', metavar='ELEM',
+                        help='Sink element for the --preview branch (default: autovideosink)')
+    parser.add_argument('--display-width', type=int, default=1920, metavar='W',
+                        help='Preview window width in px (default: 1920)')
+    parser.add_argument('--display-height', type=int, default=1080, metavar='H',
+                        help='Preview window height in px (default: 1080)')
+    parser.add_argument('--display-fps', type=int, default=30, metavar='FPS',
+                        help='Throttle the preview branch to this framerate (default: 30)')
 
     args = parser.parse_args()
 
@@ -326,6 +346,57 @@ Examples:
         'videosink': videosink,
     }
 
+    # --- Optional live-preview branch: tee off the linescan output ---
+    tee = None
+    preview_elements = ()
+    if args.preview:
+        tee = Gst.ElementFactory.make("tee", "tee")
+        preview_queue = Gst.ElementFactory.make("queue", "preview_queue")
+        preview_convert = Gst.ElementFactory.make("videoconvert", "preview_convert")
+        preview_scale = Gst.ElementFactory.make("videoscale", "preview_scale")
+        preview_caps = Gst.ElementFactory.make("capsfilter", "preview_caps")
+        preview_rate = Gst.ElementFactory.make("videorate", "preview_rate")
+        preview_rate_caps = Gst.ElementFactory.make("capsfilter", "preview_rate_caps")
+        preview_leaky = Gst.ElementFactory.make("queue", "preview_leaky")
+        preview_sink = Gst.ElementFactory.make(args.preview_sink, "preview_sink")
+
+        preview_elements = (
+            preview_queue, preview_convert, preview_scale, preview_caps,
+            preview_rate, preview_rate_caps, preview_leaky, preview_sink,
+        )
+
+        elements.update({
+            'tee': tee,
+            'preview_queue': preview_queue,
+            'preview_convert': preview_convert,
+            'preview_scale': preview_scale,
+            'preview_caps': preview_caps,
+            'preview_rate': preview_rate,
+            'preview_rate_caps': preview_rate_caps,
+            'preview_leaky': preview_leaky,
+            f'preview_sink ({args.preview_sink})': preview_sink,
+        })
+
+        if preview_caps is not None:
+            # pixel-aspect-ratio=1/1 keeps videoscale from re-stretching via a
+            # non-square PAR that the sink would then undo.
+            preview_caps.set_property("caps", Gst.Caps.from_string(
+                f"video/x-raw,width={args.display_width},"
+                f"height={args.display_height},pixel-aspect-ratio=1/1"
+            ))
+        if preview_rate_caps is not None:
+            # linescan emits one frame per camera frame (200-1300 fps); throttle
+            # to a sane preview rate or the video sink drops "late" buffers.
+            preview_rate_caps.set_property("caps", Gst.Caps.from_string(
+                f"video/x-raw,framerate={args.display_fps}/1"
+            ))
+        if preview_leaky is not None:
+            # drop stale roll frames instead of back-pressuring linescan.
+            preview_leaky.set_property("leaky", 2)  # downstream
+            preview_leaky.set_property("max-size-buffers", 2)
+        if preview_sink is not None:
+            preview_sink.set_property("sync", False)
+
     failed_elements = [name for name, elem in elements.items() if elem is None]
 
     if failed_elements:
@@ -402,6 +473,9 @@ Examples:
         print(f"Recording output directory: {output_dir}")
         print(f"Camera rotated 90 (videoflip method={flip_method}), then vertical linescan "
               f"with output-size={output_size} (aspect {args.aspect})")
+        if args.preview:
+            print(f"Preview branch: tee -> {args.preview_sink} "
+                  f"({args.display_width}x{args.display_height} @ {args.display_fps}fps)")
 
     # Connect rollover signal
     linescan.connect("rollover", on_rollover)
@@ -412,6 +486,11 @@ Examples:
         queue2, videoconvert, videosink
     ):
         pipeline.add(elem)
+
+    if args.preview:
+        pipeline.add(tee)
+        for elem in preview_elements:
+            pipeline.add(elem)
 
     # Link processing chain
     if not source.link(intervalometer):
@@ -426,7 +505,24 @@ Examples:
     if not queue1.link(linescan):
         print("ERROR: Could not link queue1 to linescan")
         return -1
-    if not linescan.link(queue2):
+    if args.preview:
+        # linescan -> tee -+-> queue2 -> ... -> fakesink   (rollover -> JPEG)
+        #                  +-> preview branch -> live video sink
+        if not linescan.link(tee):
+            print("ERROR: Could not link linescan to tee")
+            return -1
+        if not tee.link(queue2):
+            print("ERROR: Could not link tee to queue2")
+            return -1
+        preview_chain = [
+            tee, preview_queue, preview_convert, preview_scale, preview_caps,
+            preview_rate, preview_rate_caps, preview_leaky, preview_sink,
+        ]
+        for a, b in zip(preview_chain, preview_chain[1:]):
+            if not a.link(b):
+                print(f"ERROR: Could not link {a.get_name()} to {b.get_name()}")
+                return -1
+    elif not linescan.link(queue2):
         print("ERROR: Could not link linescan to queue2")
         return -1
     if not queue2.link(videoconvert):
