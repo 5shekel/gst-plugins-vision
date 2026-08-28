@@ -28,3 +28,4 @@ results/
 *.csv
 # ueye samples
 sys/idsueye/Source/*
+**/**/__pycache__/

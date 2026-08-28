@@ -1,96 +1,49 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["argcomplete", "numpy", "pillow"]
 # ///
 #
-# Linescan Pipeline with Rollover Signal Capture
+# Linescan capture -> PNG on rollover
 #
-# This script creates a GStreamer pipeline that captures linescan images from an IDS uEye camera
-# and saves frames only when the linescan buffer wraps around (rollover events).
-# Features dual output: live preview display and automatic file saving on rollover.
+# Builds a GStreamer pipeline from an IDS uEye line-scan camera:
+#
+#   idsueyesrc -> intervalometer -> videoflip -> queue -> linescan -> queue -> videoconvert -> fakesink
+#
+# linescan accumulates one column per camera frame into an `output-size`-wide
+# image. On every buffer rollover the "rollover" signal fires and on_rollover()
+# writes the accumulated image out as a PNG.
+#
+# Geometry (ini/roi-dusk.ini, ROI 2016 x 20):
+#   videoflip method=3 (CCW 90)   -> 20 x 2016
+#   linescan direction=1          -> <output-size> x 2016   (roll fills left..right)
+#
+# output-size (the roll width) defaults to whatever makes the raw image match
+# --aspect (16:9) given its height: 2016 * 16/9 = 3584. Keep the raw image wide
+# and downscale it at view time; pass --output-size N to override.
+#
+# No videocrop: linescan already selects a single line (line-index, default =
+# middle column), so trimming rows off the ROI first is redundant.
+#
+# Output: results/<date>/<funny-name>/linescan_capture_NNNNNN.png
+#         (override with --output-dir)
+#
+# Usage:
+#   uv run gst/linescan/launch_with_signal.py
+#   uv run gst/linescan/launch_with_signal.py --mode night
+#   uv run gst/linescan/launch_with_signal.py --config ini/roi-night.ini
+#   uv run gst/linescan/launch_with_signal.py --run-seconds 20 --debug
+#   uv run gst/linescan/launch_with_signal.py --gst-debug
 #
 # Prerequisites:
-#   1. Build the GStreamer plugins first: .\build.ps1
-#   2. Ensure GST_PLUGIN_PATH includes the build directory with custom plugins
-#   3. The custom linescan plugin must be built and available to GStreamer
+#   - Build the custom plugins: .\build.ps1  (idsueyesrc, intervalometer, linescan)
+#   - Set up the environment: . .\scripts\setup_gstreamer_env.ps1
+#   - Run from the workspace root so the --config path resolves.
 #
-# Basic Usage:
-#   uv run .\gst\linescan\launch_with_signal.py                      # Run with defaults (day mode)
-#   uv run .\gst\linescan\launch_with_signal.py --mode night         # Night mode (higher exposure & gain)
-#   uv run .\gst\linescan\launch_with_signal.py --debug              # Enable debug output
-#   uv run .\gst\linescan\launch_with_signal.py --format png         # Save as PNG
-#   uv run .\gst\linescan\launch_with_signal.py --output-dir custom  # Custom output directory
-#   uv run .\gst\linescan\launch_with_signal.py --gst-debug          # Enable GStreamer debug (level 3)
-#   uv run .\gst\linescan\launch_with_signal.py --help               # Show all options
-#   python gst/linescan/launch_with_signal.py                        # Alternative without uv
-#
-# Features:
-#   - Automatic capture on linescan buffer rollover (precise frame control)
-#   - Live preview display window (autovideosink)
-#   - File output with automatic sequential numbering
-#   - IDS uEye camera source with intervalometer integration
-#   - Configurable camera settings (exposure, framerate, gain)
-#   - Camera rotated 90° clockwise, then vertical linescan with 1900px output size
-#   - 3-pixel bottom crop for sensor cleanup
-#   - Dual output via tee element (display + file save)
-#
-# Pipeline Architecture:
-#   idsueyesrc -> intervalometer -> videocrop -> videoflip -> queue -> linescan -> videoconvert -> autovideosink
-#
-#   Note: Files are saved via Python in the rollover signal callback, not through the pipeline
-#
-# Configuration:
-#   - Camera config: ini/roi-night.ini (adjust CONFIG_FILE variable if needed)
-#   - Camera modes:
-#     * Day mode (default): exposure=0.4ms, gain=0, framerate=200fps
-#     * Night mode: exposure=5.25ms, gain=65, framerate=200fps
-#   - Device ID: 2 (set in source.set_property)
-#   - Linescan output size: 1900 pixels (set in linescan.set_property)
-#   - Output directory: results/<date>/<funny-name>/ (auto-created with funny names)
-#   - Output format: JPEG (quality 95) or PNG (lossless)
-#
-# Output Files:
-#   - Format: linescan_rollover_####.jpeg (or .png with --format png)
-#   - Location: results/<date>/<funny-name>/ by default (e.g., "fuzzy-photon")
-#              or custom path with --output-dir
-#   - Triggered by: Buffer rollover events
-#   - Quality: JPEG=95, PNG=lossless
-#   - Sequential numbering: 0000, 0001, 0002, etc.
-#   - Example: results/20251118/bouncy-pixel/linescan_rollover_0000.jpeg
-#
-# Stopping:
-#   Press Ctrl+C to stop the pipeline gracefully
-#
-# Troubleshooting:
-#
-#
-#   Error: "No such element 'linescan'" or "No such element 'idsueyesrc'"
-#   - Cause: Custom plugins not found in GST_PLUGIN_PATH
-#   - Solution:
-#     1. Verify plugins are built in the output directory
-#     2. Set GST_PLUGIN_PATH to include the build directory
-#     3. Run: gst-inspect-1.0 --print-plugin-auto-install-info to check plugins
-#
-# Performance Notes:
-#   - Files are saved via Python/PIL in the rollover callback (only when buffer wraps)
-#   - The display shows the live linescan accumulation
-#   - No buffer drops related to encoding since file saving is outside the pipeline
-#   - Rollover occurs after accumulating output-size (1900) lines from camera frames
-#
-# Notes:
-#   - Requires GStreamer with custom vision plugins installed (build with .\build.ps1)
-#   - Must run from workspace root (c:/dev/gst-plugins-vision) or adjust CONFIG_FILE path
-#   - GST_PLUGIN_PATH must include the directory containing built custom plugins
-#   - Enable GStreamer debug logging by modifying Gst.debug_set_threshold_for_name() call
-#   - Intervalometer provides automatic gain ramping for timelapse scenarios
-#   - The rollover signal is defined in gst/linescan/gstlinescan.c:178-182
-#   - To check if plugin is loaded: GST_DEBUG=2 gst-inspect-1.0 linescan
-#   - Uses multifilesink for automatic sequential file numbering
-#
+# Stop with Ctrl+C. The rollover signal is defined in gst/linescan/gstlinescan.c.
 
 import os
 import sys
+import time
 
 # Check for required environment variable
 gst_root = os.environ.get("GSTREAMER_1_0_ROOT_MSVC_X86_64")
@@ -115,15 +68,18 @@ else:
 
 import gi
 gi.require_version('Gst', '1.0')
-from gi.repository import Gst, GLib
+gi.require_version('GstVideo', '1.0')
+from gi.repository import Gst, GLib, GstVideo
 import argparse
+import configparser
 from datetime import datetime
 import random
-import numpy as np
-from PIL import Image
+import struct
+import zlib
+
 
 frame_counter = 0
-output_dir = None  # Will be set in main()
+output_dir = None  # Set in main()
 
 # Funny two-word name lists
 ADJECTIVES = [
@@ -135,78 +91,110 @@ NOUNS = [
     "vector", "sensor", "filter", "shutter", "aperture", "capture", "snapshot", "frame"
 ]
 
-# Config file path - adjust if running from different directory
-# From workspace root: "ini/roi-night.ini"
-# From gst/linescan: "../../ini/roi-night.ini"
-CONFIG_FILE = "ini/roi-night.ini"
+# Camera config, relative to the workspace root.
+DEFAULT_CONFIG = "ini/roi-dusk.ini"
+
+# Preferred aspect ratio of the raw linescan image. The roll width (output-size)
+# is derived from it so the output can be downscaled at view time without
+# distortion. Keep the raw image wide; scale it down in the viewer.
+DEFAULT_ASPECT = "16:9"
+
+
+def _roi_line_length(config_path):
+    """Length in px of the line linescan extracts, i.e. the raw output height.
+
+    The IDS ini stores the sensor ROI as [Image size] Width x Height. The
+    pipeline rotates the frame 90 degrees (videoflip method=1/3) before
+    linescan, so the ROI *Width* becomes the linescan output height.
+    Returns None if the ini can't be read.
+    """
+    try:
+        cp = configparser.ConfigParser()
+        # IDS ini files are written with a UTF-8 BOM.
+        if not cp.read(config_path, encoding="utf-8-sig"):
+            return None
+        return cp.getint("Image size", "Width")
+    except (configparser.Error, ValueError, OSError):
+        return None
+
+
+def _derive_output_size(line_length, aspect):
+    """Roll width for the given line length (output height) and 'W:H' aspect."""
+    aw, ah = (int(x) for x in aspect.split(":"))
+    return round(line_length * aw / ah)
+
 
 def on_rollover(linescan, buffer):
-    """Called when linescan buffer wraps around - save the buffer to file"""
+    """Called when the linescan buffer wraps around - write it out as a PNG."""
     global frame_counter
-    
-    # Create output directory if needed
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    
-    # Get format from args if available, otherwise default to jpeg
-    import __main__
-    file_format = getattr(__main__, 'output_format', 'jpeg')
-    
-    # Generate filename
-    filename = os.path.join(output_dir, f"linescan_rollover_{frame_counter:04d}.{file_format}")
-    
-    # Map the buffer to get image data
-    success, mapinfo = buffer.map(Gst.MapFlags.READ)
-    if not success:
-        print(f"[ROLLOVER ERROR] Failed to map buffer for frame {frame_counter}")
+    caps = linescan.get_static_pad("src").get_current_caps()
+    if not caps or caps.is_empty():
         return
-    
+
     try:
-        # Get caps to determine image dimensions
-        caps = buffer.get_caps() if hasattr(buffer, 'get_caps') else linescan.get_static_pad("src").get_current_caps()
-        structure = caps.get_structure(0)
-        width = structure.get_value('width')
-        height = structure.get_value('height')
-        format_str = structure.get_value('format')
-        
-        # Convert buffer data to numpy array
-        data = np.frombuffer(mapinfo.data, dtype=np.uint8)
-        
-        # Determine number of channels based on format
-        if format_str in ['RGB', 'BGR']:
-            channels = 3
-            data = data.reshape((height, width, channels))
-            if format_str == 'BGR':
-                # Convert BGR to RGB for PIL
-                data = data[:, :, ::-1]
-        elif format_str in ['GRAY8']:
-            channels = 1
-            data = data.reshape((height, width))
-        else:
-            print(f"[ROL LOVER WARNING] Unsupported format {format_str}, saving as-is")
-            data = data.reshape((height, width, -1))
-        
-        # Create PIL Image and flip vertically
-        if channels == 1:
-            img = Image.fromarray(data, mode='L')
-        else:
-            img = Image.fromarray(data, mode='RGB')
-        
-        # Flip vertically to match display output
-        img = img.transpose(Image.FLIP_TOP_BOTTOM)
-        
-        if file_format == 'png':
-            img.save(filename, 'PNG')
-        else:
-            img.save(filename, 'JPEG', quality=95)
-        
-        # print(f"[ROLLOVER] Frame {frame_counter} saved to: {filename}")
-        
+        info = GstVideo.VideoInfo.new_from_caps(caps)
+        success, map_info = buffer.map(Gst.MapFlags.READ)
+        if not success:
+            return
+
+        try:
+            structure = caps.get_structure(0)
+            width = structure.get_value("width")
+            height = structure.get_value("height")
+            fmt = structure.get_value("format")
+
+            if fmt != "BGR":
+                return
+
+            stride = info.stride[0]
+            row_bytes = width * 3
+            image_rows = []
+            for y in range(height):
+                start = y * stride
+                row = map_info.data[start:start + row_bytes]
+                image_rows.append(bytes(row))
+
+            filename = os.path.join(output_dir, f"linescan_capture_{frame_counter:06d}.png")
+            _write_png_bgr(filename, width, height, image_rows)
+            print(f"Wrote frame {frame_counter}: {filename}")
+            frame_counter += 1
+        finally:
+            buffer.unmap(map_info)
     except Exception as e:
-        print(f"[ROLLOVER ERROR] Failed to save frame {frame_counter}: {e}")
-    finally:
-        buffer.unmap(mapinfo)
-        frame_counter += 1
+        print(f"Failed to save rollover frame: {e}")
+
+
+def _write_png_chunk(handle, chunk_type, data):
+    handle.write(struct.pack(">I", len(data)))
+    handle.write(chunk_type)
+    handle.write(data)
+    crc = zlib.crc32(chunk_type)
+    crc = zlib.crc32(data, crc)
+    handle.write(struct.pack(">I", crc & 0xFFFFFFFF))
+
+
+def _write_png_bgr(path, width, height, rows):
+    png_signature = b"\x89PNG\r\n\x1a\n"
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+
+    raw = bytearray()
+    for row in rows:
+        rgb_row = bytearray(len(row))
+        for i in range(0, len(row), 3):
+            rgb_row[i] = row[i + 2]
+            rgb_row[i + 1] = row[i + 1]
+            rgb_row[i + 2] = row[i]
+        raw.append(0)
+        raw.extend(rgb_row)
+
+    compressed = zlib.compress(bytes(raw), level=6)
+
+    with open(path, "wb") as handle:
+        handle.write(png_signature)
+        _write_png_chunk(handle, b"IHDR", ihdr)
+        _write_png_chunk(handle, b"IDAT", compressed)
+        _write_png_chunk(handle, b"IEND", b"")
+
 
 def on_message(bus, message):
     """Handle pipeline messages"""
@@ -223,58 +211,77 @@ def on_message(bus, message):
         warn, debug = message.parse_warning()
         print(f"\nWarning: {warn}")
 
+
 def main():
-    global loop, output_format
-    
+    global loop, output_dir
+
     # Parse command line arguments
     parser = argparse.ArgumentParser(
-        description='Linescan pipeline with rollover signal capture',
+        description='Linescan pipeline with direct PNG recording on rollover',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
   %(prog)s                                    # Run with defaults (day mode)
   %(prog)s --mode night                       # Night mode (higher exposure & gain)
-  %(prog)s --debug                            # Enable debug output
-  %(prog)s --format png                       # Save as PNG instead of JPEG
+  %(prog)s --config ini/roi-night.ini         # Use a different camera config
   %(prog)s --output-dir my_captures           # Custom output directory
+  %(prog)s --run-seconds 20 --debug           # Timed verification run
   %(prog)s --gst-debug                        # Enable GStreamer debug
-  %(prog)s --gst-debug-level 4                # Set custom GStreamer debug level
         '''
     )
-    
+
     parser.add_argument('--debug', '-d', action='store_true',
                         help='Enable debug output from this script')
     parser.add_argument('--gst-debug', action='store_true',
                         help='Enable GStreamer debug output (level 3)')
     parser.add_argument('--gst-debug-level', type=int, metavar='LEVEL',
                         help='Set GStreamer debug level (0-9, default: 3 if --gst-debug)')
-    parser.add_argument('--format', '-f', choices=['jpeg', 'png'], default='jpeg',
-                        help='Output image format (default: jpeg)')
     parser.add_argument('--output-dir', '-o', metavar='DIR',
                         help='Output directory (default: results/<date>/<funny-name>)')
+    parser.add_argument('--config', '-c', default=DEFAULT_CONFIG, metavar='INI',
+                        help=f'Camera config .ini (default: {DEFAULT_CONFIG})')
     parser.add_argument('--mode', '-m', choices=['day', 'night'], default='day',
-                        help='Camera mode: day (0.2ms exposure, 0 gain) or night (5.25ms exposure, 65 gain) (default: day)')
+                        help='Camera mode: day (0.02ms exposure, 0 gain) or night (5.25ms exposure, 65 gain) (default: day)')
     parser.add_argument('--framerate', '-r', type=int, default=200, metavar='FPS',
                         help='Camera framerate in fps (default: 200)')
-    
+    parser.add_argument('--device-id', type=int, default=1, metavar='ID',
+                        help='IDS uEye device id (default: 1)')
+    parser.add_argument('--num-buffers', type=int, metavar='N',
+                        help='Stop after capturing N source frames (useful for verification runs)')
+    parser.add_argument('--aspect', default=DEFAULT_ASPECT, metavar='W:H',
+                        help=f'Aspect ratio used to derive the roll width from the ROI (default: {DEFAULT_ASPECT})')
+    parser.add_argument('--output-size', type=int, default=None, metavar='N',
+                        help='Lines to accumulate before rollover = image width (default: derived from --aspect and the ROI)')
+    parser.add_argument('--run-seconds', type=int, metavar='N',
+                        help='Run for N seconds, then stop cleanly (useful for verification runs)')
+
     args = parser.parse_args()
-    
-    # Make format globally available for rollover callback
-    output_format = args.format
-    
+
+    # Resolve the roll width: explicit --output-size wins, otherwise derive it
+    # from the ROI line length and the target aspect ratio.
+    if args.output_size is not None:
+        output_size = args.output_size
+    else:
+        line_length = _roi_line_length(args.config)
+        if line_length:
+            output_size = _derive_output_size(line_length, args.aspect)
+        else:
+            output_size = 1920
+            print(f"WARNING: could not read ROI Width from {args.config}; "
+                  f"falling back to --output-size {output_size}")
+
     # Set up output directory
-    global output_dir
     if args.output_dir:
         output_dir = args.output_dir
     else:
         # Create default: results/<date>/<funny-name>
         date_str = datetime.now().strftime("%Y%m%d")
         results_base = os.path.join("results", date_str)
-        
+
         # Generate funny name: adjective-noun
         funny_name = f"{random.choice(ADJECTIVES)}-{random.choice(NOUNS)}"
         output_dir = os.path.join(results_base, funny_name)
-        
+
         # If name exists, add number suffix
         if os.path.exists(output_dir):
             seq = 1
@@ -283,10 +290,10 @@ Examples:
                 if not os.path.exists(output_dir):
                     break
                 seq += 1
-        
+
         if args.debug:
             print(f"Using auto-generated output directory: {output_dir}")
-    
+
     # Set GStreamer debug level
     if args.gst_debug_level is not None:
         debug_level = args.gst_debug_level
@@ -294,54 +301,58 @@ Examples:
         debug_level = 3
     else:
         debug_level = None
-    
+
     if debug_level is not None:
         os.environ['GST_DEBUG'] = str(debug_level)
         if args.debug:
             print(f"Setting GST_DEBUG={debug_level}")
-    
+
     Gst.init(None)
-    
+
     if args.debug:
         print("Initializing GStreamer pipeline...")
         print(f"GStreamer version: {Gst.version_string()}")
-    
+
     # Create output directory early
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
         if args.debug:
             print(f"Created output directory: {output_dir}")
-    
-    # Create pipeline with tee to split output
+
+    # Create pipeline
     pipeline = Gst.Pipeline.new("linescan-capture")
-    
-    # Source chain
+
+    # --- Processing chain elements ---
     source = Gst.ElementFactory.make("idsueyesrc", "source")
     intervalometer = Gst.ElementFactory.make("intervalometer", "intervalometer")
-    videocrop = Gst.ElementFactory.make("videocrop", "crop")
     videoflip = Gst.ElementFactory.make("videoflip", "flip")
     queue1 = Gst.ElementFactory.make("queue", "queue1")
     linescan = Gst.ElementFactory.make("linescan", "linescan")
-    
-    # Output flip and display
+    queue2 = Gst.ElementFactory.make("queue", "queue2")
     videoconvert = Gst.ElementFactory.make("videoconvert", "convert")
-    videosink = Gst.ElementFactory.make("autovideosink", "videosink")
-    
+    videosink = Gst.ElementFactory.make("fakesink", "videosink")
+    # Let the post-linescan queue hold a couple of ~12 MB frames without
+    # blocking linescan on back-pressure from the sink.
+    queue2.set_property("max-size-buffers", 3)
+    queue2.set_property("max-size-bytes", 0)
+    queue2.set_property("max-size-time", 0)
+    videosink.set_property("sync", False)
+
     # Check which elements failed to create
     elements = {
         'pipeline': pipeline,
         'idsueyesrc': source,
         'intervalometer': intervalometer,
-        'videocrop': videocrop,
+        'flip': videoflip,
         'queue1': queue1,
         'linescan': linescan,
-        'videoflip': videoflip,
+        'queue2': queue2,
         'videoconvert': videoconvert,
-        'videosink': videosink
+        'videosink': videosink,
     }
-    
+
     failed_elements = [name for name, elem in elements.items() if elem is None]
-    
+
     if failed_elements:
         print("ERROR: Failed to create the following elements:")
         for name in failed_elements:
@@ -349,26 +360,26 @@ Examples:
         print("\nTroubleshooting:")
         if 'linescan' in failed_elements or 'idsueyesrc' in failed_elements:
             print("  Custom plugins not found. Make sure:")
-            print("  1. Run .\build.ps1 to build the plugins")
+            print("  1. Run .\\build.ps1 to build the plugins")
             print("  2. Set GST_PLUGIN_PATH to include the build directory")
             print("  3. Verify with: gst-inspect-1.0 linescan")
         if 'intervalometer' in failed_elements:
             print("  Intervalometer plugin not found (custom plugin)")
         return -1
-    
+
     if args.debug:
         print("All elements created successfully")
-    
+
     # Configure source
     if args.debug:
-        print(f"Configuring camera with config file: {CONFIG_FILE}")
-    
-    if not os.path.exists(CONFIG_FILE):
-        print(f"WARNING: Config file not found: {CONFIG_FILE}")
+        print(f"Configuring camera with config file: {args.config}")
+
+    if not os.path.exists(args.config):
+        print(f"WARNING: Config file not found: {args.config}")
         print("Continuing without config file...")
     else:
-        source.set_property("config-file", CONFIG_FILE)
-    
+        source.set_property("config-file", args.config)
+
     # Set camera parameters based on mode
     if args.mode == 'day':
         exposure = 0.02
@@ -376,19 +387,21 @@ Examples:
     else:  # night
         exposure = 5.25
         gain = 65
-    
+
     framerate = args.framerate
-    device_id = 1
-    
+    device_id = args.device_id
+
     source.set_property("exposure", exposure)
     source.set_property("framerate", framerate)
     source.set_property("gain", gain)
     source.set_property("device-id", device_id)
-    
+    if args.num_buffers is not None:
+        source.set_property("num-buffers", args.num_buffers)
+
     if args.debug:
         print(f"Camera mode: {args.mode}")
         print(f"Camera settings: exposure={exposure}ms, framerate={framerate}fps, gain={gain}, device-id={device_id}")
-    
+
     # Configure intervalometer
     intervalometer.set_property("enabled", True)
     intervalometer.set_property("camera-element", "source")
@@ -398,45 +411,35 @@ Examples:
     intervalometer.set_property("gain-max", 82)
     intervalometer.set_property("target-brightness", 80.0)
     intervalometer.set_property("log-file", "timelapse.csv")
-    
-    # Configure videocrop
-    videocrop.set_property("bottom", 3)
-    
-    # Configure videoflip to rotate 90 degrees clockwise (method=1 is clockwise)
-    # Available methods: 0:none, 1:clockwise, 2:rotate-180, 3:counterclockwise, 
-    # 4:horizontal-flip, 5:vertical-flip, 6:upper-left-diagonal, 7:upper-right-diagonal, 8:automatic
-    videoflip.set_property("method", 1)
-    
-    # Configure linescan
+
+    # Rotate 90 degrees counter-clockwise (method=1 clockwise, method=3 CCW)
+    videoflip.set_property("method", 3)
+
+    # Configure linescan: extract a vertical column per frame, stack horizontally
     linescan.set_property("direction", 1)  # vertical
-    linescan.set_property("output-size", 1900)
-    
-    
+    linescan.set_property("output-size", output_size)
+
     if args.debug:
-        print(f"Camera rotated 90° clockwise, then vertical linescan with output-size=1900, output flipped vertically")
-    
-    # Connect rollover signal - files are saved in the callback
+        print(f"Recording output directory: {output_dir}")
+        print(f"Camera rotated 90 CCW, then vertical linescan with output-size={output_size} "
+              f"(aspect {args.aspect})")
+
+    # Connect rollover signal
     linescan.connect("rollover", on_rollover)
-    
+
     # Add all elements to pipeline
-    pipeline.add(source)
-    pipeline.add(intervalometer)
-    pipeline.add(videocrop)
-    pipeline.add(videoflip)
-    pipeline.add(queue1)
-    pipeline.add(linescan)
-    pipeline.add(videoconvert)
-    pipeline.add(videosink)
-    
-    # Link elements - simple chain now
+    for elem in (
+        source, intervalometer, videoflip, queue1, linescan,
+        queue2, videoconvert, videosink
+    ):
+        pipeline.add(elem)
+
+    # Link processing chain
     if not source.link(intervalometer):
         print("ERROR: Could not link source to intervalometer")
         return -1
-    if not intervalometer.link(videocrop):
-        print("ERROR: Could not link intervalometer to videocrop")
-        return -1
-    if not videocrop.link(videoflip):
-        print("ERROR: Could not link videocrop to videoflip")
+    if not intervalometer.link(videoflip):
+        print("ERROR: Could not link intervalometer to videoflip")
         return -1
     if not videoflip.link(queue1):
         print("ERROR: Could not link videoflip to queue1")
@@ -444,42 +447,55 @@ Examples:
     if not queue1.link(linescan):
         print("ERROR: Could not link queue1 to linescan")
         return -1
+    if not linescan.link(queue2):
+        print("ERROR: Could not link linescan to queue2")
+        return -1
+    if not queue2.link(videoconvert):
+        print("ERROR: Could not link queue2 to videoconvert")
+        return -1
     if not videoconvert.link(videosink):
         print("ERROR: Could not link videoconvert to videosink")
         return -1
-    
+
+    if args.run_seconds is not None:
+        def on_stop_timer():
+            loop.quit()
+            return False
+
+        GLib.timeout_add_seconds(args.run_seconds, on_stop_timer)
+
     # Enable debug for linescan if requested
     if args.debug or args.gst_debug:
         Gst.debug_set_threshold_for_name("linescan", Gst.DebugLevel.LOG)
         if args.debug:
             print("Enabled LOG level debugging for linescan element")
-    
+
     # Set up message handling before starting
     bus = pipeline.get_bus()
     bus.add_signal_watch()
     bus.connect("message", on_message)
-    
+
     if args.debug:
         print("\nStarting pipeline...")
         print(f"Pipeline state: {pipeline.get_state(0)[1].value_nick}")
-    
+
     # Start pipeline
-    print(f"Frames will be saved to: {output_dir}/")
+    print(f"PNG frames will be written to: {output_dir}/")
     print("Press Ctrl+C to stop\n")
-    
+
     ret = pipeline.set_state(Gst.State.PLAYING)
     if ret == Gst.StateChangeReturn.FAILURE:
         print("\nERROR: Unable to set pipeline to playing state")
         print("\nPossible causes:")
-        print("  1. Camera not connected or unavailable (device-id=1)")
-        print("  2. Config file issue: check if ini/roi-night.ini exists and is valid")
+        print(f"  1. Camera not connected or unavailable (device-id={device_id})")
+        print(f"  2. Config file issue: check if {args.config} exists and is valid")
         print("  3. Element compatibility issues")
         print("\nTo debug further:")
         print("  - Run with --debug flag for more information")
         print("  - Run with --gst-debug to see GStreamer messages")
         print("  - Check camera with: gst-launch-1.0 idsueyesrc ! fakesink")
         print("  - Verify config file exists and camera is connected")
-        
+
         # Try to get more error info from bus
         bus = pipeline.get_bus()
         msg = bus.timed_pop_filtered(Gst.SECOND, Gst.MessageType.ERROR | Gst.MessageType.WARNING)
@@ -489,9 +505,9 @@ Examples:
                 print(f"\nGStreamer Error: {err}")
                 if debug:
                     print(f"Debug info: {debug}")
-        
+
         return -1
-    
+
     if args.debug:
         # Wait for state change to complete
         state_ret, state, pending = pipeline.get_state(Gst.CLOCK_TIME_NONE)
@@ -499,18 +515,23 @@ Examples:
         print(f"Current state: {state.value_nick}")
         if pending != Gst.State.VOID_PENDING:
             print(f"Pending state: {pending.value_nick}")
-    
+
     # Run main loop
     loop = GLib.MainLoop()
     try:
         loop.run()
     except KeyboardInterrupt:
         print("\n\nStopping pipeline...")
-    
+    except Exception as e:
+        print(f"\n\nUnexpected error: {e}")
+    finally:
+        time.sleep(0.1)
+
     # Cleanup
     pipeline.set_state(Gst.State.NULL)
-    print(f"\nCaptured {frame_counter} rollover frames")
+    print(f"\nCaptured {frame_counter} rollover frames -> {output_dir}/")
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())
