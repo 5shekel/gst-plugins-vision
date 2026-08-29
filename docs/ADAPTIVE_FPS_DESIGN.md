@@ -91,6 +91,38 @@ dawn, the ceiling rises again and rung 4 ramps fps up gradually.
   `log₁.₁₅(800/150)` ≈ 12 steps ≈ 4 min at 20 s dwell — comfortably inside a
   20–40 min dusk.
 
+### Bright-side unwind (dawn recovery)
+
+The climb rungs fire only when brightness is **above** the deadband. That is
+fine at dusk — each rung genuinely runs out of headroom, so the ladder is
+*forced* up. At dawn it is not symmetric: as light returns, the first rung
+(exposure ↓ to floor) lands brightness back **inside** the ±10 deadband while
+gain, gain-boost and fps are still in their night positions. `update_camera_
+settings()` then hits its deadband early-return every tick and **freezes the
+whole night knob-stack for the rest of the day** (observed on-rig: exposure
+floored at 0.03 ms, gain 13, boost on, fps pinned at 150, brightness ~85).
+
+Fix: a dedicated unwind pass that runs **before** the deadband return,
+[`gstintervalometer.c`](../gst/intervalometer/gstintervalometer.c) in
+`update_camera_settings()` just after the ceiling snap-downs. Guard:
+`current_exposure ≤ exposure_min + 0.01` (exposure spent) **and**
+`brightness ≥ target` (surplus light). When both hold it walks one rung per
+update back toward the daytime rails:
+
+```
+gain  → gain_min          (one ramp-rate step per update)
+→ gain-boost → off        (still boost-min-dwell gated; recentre re-raises gain,
+                           which the gain rung above then walks back down)
+→ fps → effective max      (still framerate-min-dwell gated; ×framerate-step)
+```
+
+Each rung is structurally safe against overshoot: raising fps while exposure is
+floored is brightness-neutral (`0.03 ms ≪ 1/fps`), and dropping gain / boost
+only ever *lowers* sensitivity while we already have `brightness ≥ target`. If a
+step does pull brightness back under target the pass simply stops firing and the
+normal dark-side ladder takes over. Dusk behaviour is byte-for-byte unchanged —
+the guard needs exposure floored, which never holds while it is getting darker.
+
 ### exposure_max coupling
 
 Every `set_framerate()` re-derives `exposure_max` from the camera
@@ -170,10 +202,11 @@ attractor: *the highest fps that still meets target brightness.*
 
 1. **Daytime settles with exposure near its floor**, not a mid value — rung 4 is
    appended after the exposure rung, so exposure is spent down before fps climbs.
-   Harmless (0.02 ms is what `--mode day` already runs), but it means the dawn
-   fps ramp *lags* the exposure drop by a few minutes. If that proves too
-   sluggish on-rig, reorder the bright side to `boost↓ → gain↓ → fps↑ →
-   exposure↓` with a `current_exposure < 0.7·exposure_max` guard.
+   Harmless (0.02 ms is what `--mode day` already runs). The dawn fps ramp still
+   *lags* the exposure drop: exposure floors first, then the **bright-side unwind
+   pass** (see above) walks gain → boost → fps back to the day rails one rung per
+   update — a few minutes total, dwell-gated. Earlier versions with no unwind
+   pass stalled here permanently once brightness re-entered the deadband.
 2. **`emit-every` is fixed for the run** at the `framerate-max` cadence, so night
    preview is slow (~7 fps). Clean follow-up: have the intervalometer also drive
    `linescan`'s `emit-every` on each fps change (needs the linescan element name

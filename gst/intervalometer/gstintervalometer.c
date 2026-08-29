@@ -1066,6 +1066,49 @@ gst_intervalometer_update_camera_settings (GstIntervalometer * filter,
       gst_intervalometer_set_framerate (filter, eff_fps_max, TRUE);
   }
 
+  /* Bright-side unwind (dawn recovery). The climb rungs further down only fire
+   * when brightness sits ABOVE the deadband, so a night knob-stack (gain-boost
+   * on, gain raised, fps floored) that happens to land brightness back inside
+   * the deadband as the light returns is never undone - the controller freezes
+   * there for the rest of the day (docs/ADAPTIVE_FPS_DESIGN.md "Known v1
+   * limitation #1"). Mirror the dusk climb: once exposure is spent down to its
+   * floor and there is at least target-level light, walk one rung per update
+   * back toward the daytime rails - gain -> gain_min, then gain-boost -> off,
+   * then fps -> ceiling. Runs regardless of the deadband return below; each
+   * rung is structurally gated so it cannot overshoot into darkness (raising
+   * fps while exposure is floored is brightness-neutral, dropping gain/boost
+   * only ever reduces sensitivity and we require brightness >= target). */
+  if (filter->current_exposure <= (filter->exposure_min + 0.01)
+      && brightness >= filter->target_brightness) {
+    gdouble unwind_fps_ceil = gst_intervalometer_effective_framerate_max (filter,
+        filter->boost_active);
+    gboolean fps_below_ceil = gst_intervalometer_fps_control_active (filter)
+        && unwind_fps_ceil > 0.0
+        && filter->current_framerate < unwind_fps_ceil - 0.5;
+
+    if (filter->current_gain > filter->gain_min) {
+      gint step = (gint) ramp_rate_multipliers[filter->ramp_rate];
+      if (step < 1)
+        step = 1;
+      filter->current_gain = MAX (filter->current_gain - step, filter->gain_min);
+      filter->target_gain = filter->current_gain;
+      g_object_set (filter->camera_src, "gain", filter->current_gain, NULL);
+      GST_INFO_OBJECT (filter,
+          "Unwind: gain -> %d (exposure floored, brightness %.1f >= target %.1f)",
+          filter->current_gain, brightness, filter->target_brightness);
+      return;
+    } else if (filter->auto_gain_boost && filter->boost_active) {
+      /* recentre inside toggle_gain_boost re-raises gain; the branch above then
+       * walks it back down on the following updates before fps starts. */
+      if (gst_intervalometer_toggle_gain_boost (filter, FALSE))
+        return;
+    } else if (fps_below_ceil) {
+      if (gst_intervalometer_set_framerate (filter,
+              filter->current_framerate * filter->framerate_step, FALSE))
+        return;
+    }
+  }
+
   /* Calculate brightness error with compensation */
   error = (filter->target_brightness - brightness) *
       pow (2.0, filter->compensation);
