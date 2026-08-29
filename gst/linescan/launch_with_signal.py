@@ -33,8 +33,9 @@
 # No videocrop: linescan already selects a single line (line-index, default =
 # middle column), so trimming rows off the ROI first is redundant.
 #
-# Output: results/<date>/<funny-name>/linescan_capture_NNNNNN.jpg
-#         (override with --output-dir)
+# Output: results/<date>/<funny-name>/linescan_capture_<YYYYMMDD_HHMMSS_us>.jpg
+#         (override the dir with --output-dir; timestamp names let a dir be reused
+#          across restarts without overwriting earlier captures)
 #
 # Usage:
 #   uv run gst/linescan/launch_with_signal.py
@@ -176,9 +177,14 @@ def on_rollover(linescan, buffer):
             image = Image.frombuffer(
                 "RGB", (width, height), bytes(raw), "raw", "BGR", 0, 1
             )
-            filename = os.path.join(output_dir, f"linescan_capture_{frame_counter:06d}.jpg")
+            # Timestamp name (not a running counter) so an --output-dir can be
+            # reused across restarts without clobbering earlier captures. The
+            # microsecond field also keeps it unique well above the ~13/min
+            # rollover rate. e.g. linescan_capture_20260829_143017_284519.jpg
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filename = os.path.join(output_dir, f"linescan_capture_{stamp}.jpg")
             image.save(filename, "JPEG", quality=JPEG_QUALITY)
-            print(f"Wrote frame {frame_counter}: {filename}")
+            print(f"Wrote frame {frame_counter} ({stamp}): {filename}")
             frame_counter += 1
         finally:
             buffer.unmap(map_info)
