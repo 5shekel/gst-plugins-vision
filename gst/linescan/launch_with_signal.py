@@ -277,8 +277,8 @@ Examples:
                              'as the light allows around the clock (default: on).')
     parser.add_argument('--framerate-min', type=float, default=150.0, metavar='FPS',
                         help='Adaptive-fps floor (default: 150). The darkest-night line rate.')
-    parser.add_argument('--framerate-max', type=float, default=800.0, metavar='FPS',
-                        help='Adaptive-fps ceiling / full-sun daytime target (default: 800). '
+    parser.add_argument('--framerate-max', type=float, default=1312.0, metavar='FPS',
+                        help='Adaptive-fps ceiling / full-sun daytime target (default: 1312). '
                              'Also sizes --emit-every auto.')
     parser.add_argument('--framerate-max-boost', type=float, default=400.0, metavar='FPS',
                         help='Separate, lower fps ceiling that applies only while gain-boost is on '
@@ -289,6 +289,13 @@ Examples:
     parser.add_argument('--framerate-min-dwell', type=float, default=20.0, metavar='SEC',
                         help='Min seconds to hold an fps before rung 4 changes it again '
                              '(anti-chatter at dawn/dusk; default: 20).')
+    parser.add_argument('--framerate-headroom', type=float, default=0.99, metavar='FRAC',
+                        help='After the camera opens, query the sensor-sustainable max fps '
+                             '(idsueyesrc max-framerate, from is_GetFrameTimeRange for the '
+                             'current pixel clock / ROI) and clamp the fps seed and the '
+                             'intervalometer ceilings DOWN to FRAC x that value if they sit '
+                             'above it (never raised). 1.0 = clamp to the exact sensor max; '
+                             '0 disables the query (default: 0.99).')
     parser.add_argument('--device-id', type=int, default=1, metavar='ID',
                         help='IDS uEye device id (default: 1)')
     parser.add_argument('--num-buffers', type=int, metavar='N',
@@ -792,6 +799,43 @@ Examples:
         print(f"Current state: {state.value_nick}")
         if pending != Gst.State.VOID_PENDING:
             print(f"Pending state: {pending.value_nick}")
+
+    # Sensor-limit clamp: once the camera is open, idsueyesrc exposes the highest
+    # framerate it can actually sustain for the current pixel clock / ROI
+    # (max-framerate, backed by is_GetFrameTimeRange). Requesting above it is
+    # silent - the sensor just runs slower while the exposure cap still shrinks as
+    # 1/requested - so pull the seed and the intervalometer ceilings down to
+    # headroom x that value if they sit above it. Lower-only: an explicit lower
+    # --framerate-max is left untouched. ROI/pixel clock are fixed for a run, so
+    # one read here is enough. Needs the state to have settled so the camera is open.
+    if args.framerate_headroom > 0:
+        pipeline.get_state(5 * Gst.SECOND)
+        try:
+            cam_max = float(source.get_property("max-framerate"))
+        except (TypeError, GLib.Error):
+            cam_max = 0.0  # older idsueyesrc build without the property
+        if cam_max > 0:
+            cap = args.framerate_headroom * cam_max
+            print(f"Sensor max framerate: {cam_max:.1f} fps -> clamp ceiling "
+                  f"{cap:.1f} fps ({args.framerate_headroom:g}x)")
+            if framerate > cap:
+                framerate = cap
+                source.set_property("framerate", framerate)
+                print(f"  fps seed clamped to {framerate:.1f}")
+            if adaptive_fps:
+                if args.framerate_max > cap:
+                    new_max = max(cap, args.framerate_min + 1.0)
+                    intervalometer.set_property("framerate-max", float(new_max))
+                    print(f"  intervalometer framerate-max {args.framerate_max:g} "
+                          f"-> {new_max:.1f}")
+                if args.framerate_max_boost > 0 and args.framerate_max_boost > cap:
+                    new_boost = max(cap, args.framerate_min + 1.0)
+                    intervalometer.set_property("framerate-max-boost", float(new_boost))
+                    print(f"  intervalometer framerate-max-boost "
+                          f"{args.framerate_max_boost:g} -> {new_boost:.1f}")
+        elif args.debug:
+            print("Sensor max framerate: unavailable (idsueyesrc lacks "
+                  "max-framerate); skipping clamp")
 
     # Run main loop
     loop = GLib.MainLoop()

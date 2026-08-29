@@ -87,9 +87,10 @@ dawn, the ceiling rises again and rung 4 ramps fps up gradually.
   Ceiling snap-downs bypass it.
 - Inherited: `update-interval` (1 s), `brightness-deadband` (10), `ramp-rate`,
   and the "all lower rungs pinned first" structural gate.
-- Step is multiplicative (`fps *= 1.15` / `fps /= 1.15`). Full 800→150 descent ≈
-  `log₁.₁₅(800/150)` ≈ 12 steps ≈ 4 min at 20 s dwell — comfortably inside a
-  20–40 min dusk.
+- Step is multiplicative (`fps *= 1.15` / `fps /= 1.15`). Full 1312→150 descent ≈
+  `log₁.₁₅(1312/150)` ≈ 16 steps ≈ 5 min at 20 s dwell — comfortably inside a
+  20–40 min dusk. (In practice boost engages first and snaps the ceiling to
+  `framerate-max-boost` 400, so the rung-4 crawl is only 400→150 ≈ 9 steps.)
 
 ### Bright-side unwind (dawn recovery)
 
@@ -166,14 +167,16 @@ rows — cosmetic only.
 - `--adaptive-framerate` / `--no-adaptive-framerate` — **on by default**.
 - `--framerate` is now only a **seed** (and the fixed rate when adaptive is off).
   Omitted ⇒ seed = `framerate-max` (day) or `framerate-max-boost` (night).
-- `--framerate-min` **150**, `--framerate-max` **800**, `--framerate-max-boost`
+- `--framerate-min` **150**, `--framerate-max` **1312**, `--framerate-max-boost`
   **400**, `--framerate-step` **1.15**, `--framerate-min-dwell` **20** — the
-  values chosen for this rig (night range 150–400, day range 300–800; the day
+  values chosen for this rig (night range 150–400, day range 300–1312; the day
   floor of 300 is where the controller naturally settles, not a hard clamp — the
-  hard floor is 150).
-- `--emit-every auto` is now `round(framerate-max / --display-fps)` = `round(800
-  / 30)` = **27**, sized for the run's *peak* rate. At a night fps of ~200 the
-  live preview then runs at ~7 fps; JPEG cadence is unaffected (linescan always
+  hard floor is 150). `1312` is the sensor ceiling at `ini/roi-dusk.ini`
+  (`[Timing] Framerate=1312.056738`); the sensor-limit clamp (§5 below) trims it
+  to `0.99 ×` the live `max-framerate` reading at startup anyway.
+- `--emit-every auto` is now `round(framerate-max / --display-fps)` = `round(1312
+  / 30)` = **44**, sized for the run's *peak* rate. At a night fps of ~200 the
+  live preview then runs at ~4–5 fps; JPEG cadence is unaffected (linescan always
   emits on rollover).
 
 ---
@@ -181,15 +184,15 @@ rows — cosmetic only.
 ## Transition walk-throughs
 
 **Dusk.** Light falls → exposure climbs to the `1/fps` cap → gain climbs to
-`gain-max` → gain-boost engages (rung 3), gain recentres, **fps snaps 800→400**
+`gain-max` → gain-boost engages (rung 3), gain recentres, **fps snaps 1312→400**
 → gain climbs again to the boosted ceiling → **rung 4 lowers fps** 400→348→…→150
 by ÷1.15 every ≥20 s, each step lifting `exposure_max` so the exposure rung
 refills. Monotonic, no scheduler.
 
 **Dawn.** Mirror. Light rises → exposure drops to floor → gain drops to floor →
-gain-boost drops (rung 3 mirror), ceiling rises 400→800 → **rung 4 raises fps**
+gain-boost drops (rung 3 mirror), ceiling rises 400→1312 → **rung 4 raises fps**
 by ×1.15 until `exposure` can no longer be held at floor without going bright,
-or 800 is reached.
+or 1312 is reached.
 
 **Steady daylight.** Brightness in the deadband ⇒ `update_camera_settings()`
 returns early ⇒ fps holds. If fps overshot (image went dark) brightness drops
@@ -207,15 +210,33 @@ attractor: *the highest fps that still meets target brightness.*
    pass** (see above) walks gain → boost → fps back to the day rails one rung per
    update — a few minutes total, dwell-gated. Earlier versions with no unwind
    pass stalled here permanently once brightness re-entered the deadband.
-2. **`emit-every` is fixed for the run** at the `framerate-max` cadence, so night
-   preview is slow (~7 fps). Clean follow-up: have the intervalometer also drive
+2. **`emit-every` is fixed for the run** at the `framerate-max` cadence
+   (`round(1312/30) = 44` at the default), so night preview is slow (~3–5 fps at a
+   night fps of 150–200). Clean follow-up: have the intervalometer also drive
    `linescan`'s `emit-every` on each fps change (needs the linescan element name
    + target display-fps passed in).
 3. **CSV schema bump** (see above).
-4. **`framerate-max` 800 in daytime is unverified on-rig** — throughput was only
-   bench-tested at night with a black image. Confirm brightness holds at 800 fps
-   (1.25 ms exposure cap) in real daylight, and that the pipeline sustains 800
-   with `--output-size 3584` + `emit-every 27`.
+4. **`framerate-max` 1312 in daytime is unverified on-rig** — throughput was only
+   bench-tested at night with a black image, and only up to ~800. Confirm
+   brightness holds at 1312 fps (0.76 ms exposure cap) in real daylight, and that
+   the pipeline sustains it with `--output-size 3584` + `emit-every 44`. If it
+   doesn't, drop `--framerate-max` back toward 800 (the last value with any
+   bench data behind it).
+5. **Sensor-limit clamp (added later).** `idsueyesrc` now has a read-only
+   `max-framerate` property (`is_GetFrameTimeRange` → `1/min-frame-time`) = the
+   highest fps the sensor can sustain for the current pixel clock / ROI.
+   `launch_with_signal.py --framerate-headroom FRAC` (default **0.99**) reads it
+   once after the camera opens and clamps the fps seed and the intervalometer
+   `framerate-max` / `framerate-max-boost` **down** to `FRAC × max-framerate` when
+   they exceed it (lower-only; a smaller explicit `--framerate-max` is untouched).
+   With the default `--framerate-max 1312` slightly above the live sensor reading,
+   the ceiling is effectively `0.99 × max-framerate` every run. This is a startup
+   clamp — the intervalometer itself does not re-query mid-run (ROI / pixel clock
+   are fixed for a run on this rig). `idsueyesrc` also logs a `GST_WARNING` when
+   `is_SetFrameRate` clamps a request to < 99 % of the asked rate (expect one at
+   startup if the seed is set above the sensor max before the launcher's clamp
+   runs; `--framerate-headroom 0` disables the query and lets it recur on every
+   over-target rung-4 step).
 
 ---
 
@@ -247,5 +268,6 @@ uv run gst/linescan/launch_with_signal.py --mode night --run-seconds 180 \
   each plateau for noise/brightness.
 - Confirm the night plateau image quality at whatever fps rung 4 settles on with
   `--gain-max 35 --framerate-max-boost 400`.
-- Daylight: confirm 800 fps holds brightness and the pipeline sustains it
-  (`achieved fps` in the CSV ≈ 800).
+- Daylight: confirm the `--framerate-max` ceiling (default 1312, clamped to
+  `0.99 × max-framerate` at startup) holds brightness and the pipeline sustains it
+  (`achieved fps` in the CSV ≈ the clamped ceiling). Fall back toward 800 if not.

@@ -61,6 +61,7 @@ static gboolean gst_idsueyesrc_unlock_stop (GstBaseSrc * src);
 static GstFlowReturn gst_idsueyesrc_create (GstPushSrc * src, GstBuffer ** buf);
 
 static gboolean gst_idsueyesrc_set_framerate_exposure (GstIdsueyeSrc * src);
+static gdouble gst_idsueyesrc_query_max_framerate (GstIdsueyeSrc * src);
 static gchar *gst_idsueyesrc_get_error_string (GstIdsueyeSrc * src,
     INT error_num);
 
@@ -78,7 +79,8 @@ enum
   PROP_AUTO_EXPOSURE,
   PROP_AUTO_GAIN,
   PROP_GAIN_BOOST,
-  PROP_HCAM
+  PROP_HCAM,
+  PROP_MAX_FRAMERATE
 };
 
 #define DEFAULT_PROP_CAMERA_ID 0
@@ -191,6 +193,14 @@ gst_idsueyesrc_class_init (GstIdsueyeSrcClass * klass)
   g_object_class_install_property (gobject_class, PROP_HCAM,
       g_param_spec_pointer ("hcam", "Camera Handle",
           "IDS uEye camera handle (HIDS) - read-only, available after start",
+          (GParamFlags) (G_PARAM_READABLE | G_PARAM_STATIC_STRINGS)));
+  g_object_class_install_property (gobject_class, PROP_MAX_FRAMERATE,
+      g_param_spec_double ("max-framerate", "Maximum Framerate (Hz)",
+          "Highest framerate the sensor can sustain in its CURRENT state "
+          "(pixel clock, ROI/AOI, binning, subsampling), derived live from "
+          "is_GetFrameTimeRange as 1/min-frame-time. 0 before the camera is "
+          "started or if the query fails. Read-only.",
+          0, G_MAXDOUBLE, 0,
           (GParamFlags) (G_PARAM_READABLE | G_PARAM_STATIC_STRINGS)));
 }
 
@@ -434,6 +444,9 @@ gst_idsueyesrc_get_property (GObject * object, guint property_id,
     case PROP_HCAM:
       /* Return the camera handle as a pointer */
       g_value_set_pointer (value, (gpointer)(uintptr_t)src->hCam);
+      break;
+    case PROP_MAX_FRAMERATE:
+      g_value_set_double (value, gst_idsueyesrc_query_max_framerate (src));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -1047,6 +1060,28 @@ gst_idsueyesrc_create (GstPushSrc * psrc, GstBuffer ** buf)
 }
 
 
+/* Highest framerate the sensor can sustain right now, given the current pixel
+ * clock, ROI/AOI, binning and subsampling. Wraps is_GetFrameTimeRange (which
+ * reports frame *time* in seconds); max fps = 1 / min-frame-time. Returns 0 if
+ * the camera is not open or the query fails. Cheap - safe to call per set. */
+static gdouble
+gst_idsueyesrc_query_max_framerate (GstIdsueyeSrc * src)
+{
+  double t_min = 0.0, t_max = 0.0, t_inc = 0.0;
+  INT ret;
+
+  if (!src->is_started || !src->hCam)
+    return 0.0;
+
+  ret = is_GetFrameTimeRange (src->hCam, &t_min, &t_max, &t_inc);
+  if (ret != IS_SUCCESS || t_min <= 0.0) {
+    GST_WARNING_OBJECT (src, "Failed to query frame time range (error %d)", ret);
+    return 0.0;
+  }
+
+  return 1.0 / t_min;
+}
+
 gboolean
 gst_idsueyesrc_set_framerate_exposure (GstIdsueyeSrc * src)
 {
@@ -1059,6 +1094,19 @@ gst_idsueyesrc_set_framerate_exposure (GstIdsueyeSrc * src)
     GST_WARNING_OBJECT (src, "Failed to set framerate to %.3f (error %d)",
         src->framerate, ret);
     success = FALSE;
+  } else {
+    gdouble max_fps = gst_idsueyesrc_query_max_framerate (src);
+    GST_DEBUG_OBJECT (src,
+        "Framerate: requested %.3f, sensor set %.3f, current-state max %.3f fps",
+        src->framerate, new_fps, max_fps);
+    if (src->framerate > 0.0 && new_fps < src->framerate * 0.99) {
+      GST_WARNING_OBJECT (src,
+          "Requested framerate %.3f fps is not achievable in the current camera "
+          "state; sensor clamped it to %.3f fps (max-framerate = %.3f). The "
+          "exposure cap (~1/fps) still tracks the requested value, so "
+          "over-requesting only darkens the image.",
+          src->framerate, new_fps, max_fps);
+    }
   }
 
   /* Handle auto-exposure */

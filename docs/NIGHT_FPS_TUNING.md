@@ -1,10 +1,13 @@
 # Line-scan FPS / Exposure Tuning — Day & Night Findings
 
 **Bench date:** 2026-08-28 (measurement tables below are from that session).
-**Last refreshed:** 2026-08-28 — folded in `emit-every`, `auto-gain-boost`, and the
-gain-cap knobs (`--gain-max` / `--gain-max-boost` + hard ceiling enforcement) that
-were built and verified on-rig the same night. **Adaptive framerate (the
-intervalometer's 4th rung) landed the same day — see
+**Last refreshed:** 2026-08-29 — added the `idsueyesrc max-framerate` property
+(`is_GetFrameTimeRange`) + `launch_with_signal.py --framerate-headroom`
+sensor-limit clamp, and raised the `--framerate-max` default 800 → 1312 (the
+`roi-dusk.ini` sensor ceiling). **2026-08-28:** folded in `emit-every`,
+`auto-gain-boost`, and the gain-cap knobs (`--gain-max` / `--gain-max-boost` +
+hard ceiling enforcement); **adaptive framerate (the intervalometer's 4th rung)
+landed the same day — see
 [`ADAPTIVE_FPS_DESIGN.md`](ADAPTIVE_FPS_DESIGN.md); the "framerate is not
 auto-managed" statements below are now historical.** Code is the source of truth;
 git log has anything newer than this file.
@@ -220,9 +223,18 @@ noise. So it is set from `--mode` in the launchers instead:
 
 ### Optional `.c` changes (only if this becomes routine tuning)
 
-- **`idsueyesrc`**: warn when `is_SetFrameRate`'s returned `new_fps` is well below the
-  requested value — would flag 300/400 fps requests as unachievable instead of
-  silently shrinking the exposure cap.
+- **`idsueyesrc`**: ~~warn when `is_SetFrameRate`'s returned `new_fps` is well below the
+  requested value~~ **done** — `gst_idsueyesrc_set_framerate_exposure()` now logs a
+  `GST_WARNING` ("not achievable in the current camera state; sensor clamped it to
+  …") whenever the sensor sets < 99 % of the request. It also exposes a read-only
+  **`max-framerate`** GObject property (`is_GetFrameTimeRange` → `1/min-frame-time`)
+  = the highest fps the sensor can sustain for the current pixel clock / ROI /
+  binning. `launch_with_signal.py --framerate-headroom FRAC` (default 0.99) reads
+  it once at startup and clamps the fps seed + intervalometer `framerate-max` /
+  `framerate-max-boost` **down** to `FRAC × max-framerate` if they sit above it
+  (never raised — an explicit lower `--framerate-max` is left alone). With the
+  `--framerate-max` default now 1312 (≈ the sensor ceiling) the clamp fires every
+  run, landing the ceiling at `0.99 ×` the live reading.
 - **`intervalometer` CSV**: also log the camera readback
   (`g_object_get(cam, "exposure"/"gain"/"framerate")`) next to the controller's
   belief, so the log is trustworthy at the clamp boundary. (The CSV now has a
@@ -315,8 +327,10 @@ The intervalometer lowers fps toward `--framerate-min` once exposure, gain and
 gain-boost are all pinned and it is still dark (a longer `1/fps` exposure cap
 buys light), and raises it toward the effective ceiling when light returns. A
 `--framerate-max-boost` ceiling (default 400) caps the night rate below the
-daytime `--framerate-max` (default 800). Under `--no-adaptive-framerate` the old
-advice stands: leave `--framerate` at 200 for the night.
+daytime `--framerate-max` (default 1312, the `roi-dusk.ini` sensor ceiling;
+trimmed to `0.99 ×` the live `idsueyesrc max-framerate` at startup). Under
+`--no-adaptive-framerate` the old advice stands: leave `--framerate` at 200 for
+the night.
 
 **Daytime — see the next section.**
 
@@ -384,12 +398,13 @@ BaseTransform an empty placeholder, so the ~21.7 MB output buffer is never even
 allocated on those frames.
 
 `launch_with_signal.py` exposes `--emit-every` (default `auto` =
-`round(framerate / --display-fps)`), so day mode runs the camera at full rate with
-`output-size=3584` and the roll geometry intact:
+`round(framerate-max / --display-fps)`, sized for the run's *peak* rate), so day
+mode runs the camera at full rate with `output-size=3584` and the roll geometry
+intact:
 
 ```
-uv run gst/linescan/launch_with_signal.py --mode day --framerate 800
-# auto -> emit-every 27 (800/30); preview + JPEG cadence unchanged
+uv run gst/linescan/launch_with_signal.py --mode day
+# auto -> emit-every 44 (1312/30, from --framerate-max); preview + JPEG cadence unchanged
 ```
 
 Implementation: [`gstlinescan.c`](../gst/linescan/gstlinescan.c) `gst_linescan_transform` /
@@ -405,12 +420,15 @@ new that keys off linescan's output-buffer timing at the full rate would need a
 
 ### Still needs a real daytime check
 
-These throughput runs were at night (exposure floored, image black). What tonight
-cannot verify: image brightness at 800 fps in daylight, where exposure is capped at
-`1/800 = 1.25 ms`. Likely fine in full sun, but confirm when it's light out — this
-is also the on-rig check that gates the adaptive `--framerate-max 800`
-([`ADAPTIVE_FPS_DESIGN.md`](ADAPTIVE_FPS_DESIGN.md) → *Known limitations* #4).
-With adaptive fps on (the default) daytime reaches 800 on its own; no `--mode day
+These throughput runs were at night (exposure floored, image black), and only up
+to ~800. What they cannot verify: image brightness at the new `--framerate-max`
+default of **1312 fps** in daylight, where exposure is capped at `1/1312 ≈ 0.76 ms`
+(nor that the pipeline sustains 1312 with `output-size=3584` + `emit-every 44`).
+Likely fine in full sun, but confirm when it's light out — this is the on-rig
+check that gates the adaptive `--framerate-max 1312`
+([`ADAPTIVE_FPS_DESIGN.md`](ADAPTIVE_FPS_DESIGN.md) → *Known limitations* #4). If
+it falls short, drop `--framerate-max` back toward 800. With adaptive fps on (the
+default) daytime climbs to the ceiling on its own; no `--mode day
 --output-size 448` needed.
 
 ### Also for an unattended months-long run
