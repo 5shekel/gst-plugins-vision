@@ -16,7 +16,7 @@
 # bare recorder-only pipeline.
 #
 #   linescan -> tee -+-> queue -> videoconvert -> fakesink        (rollover -> JPEG)
-#                    +-> queue -> videoconvert -> videoscale -> videorate -> queue(leaky) -> autovideosink
+#                    +-> queue -> videoconvert -> videoscale -> videorate -> queue(leaky) -> d3d12videosink
 #
 # linescan accumulates one column per camera frame into an `output-size`-wide
 # image. On every buffer rollover the "rollover" signal fires and on_rollover()
@@ -309,8 +309,13 @@ Examples:
     parser.add_argument('--preview', action=argparse.BooleanOptionalAction, default=True,
                         help='Tee the linescan output to a live video sink as well as the JPEG '
                              'recorder (default: on; --no-preview for recorder only)')
-    parser.add_argument('--preview-sink', default='autovideosink', metavar='ELEM',
-                        help='Sink element for the --preview branch (default: autovideosink)')
+    parser.add_argument('--preview-sink', default='d3d12videosink', metavar='ELEM',
+                        help='Sink element for the --preview branch (default: d3d12videosink). '
+                             'autovideosink also works but gives a plain titled window.')
+    parser.add_argument('--fullscreen', action=argparse.BooleanOptionalAction, default=True,
+                        help='Borderless-fullscreen the preview window (default: on). Applied only '
+                             'when the --preview-sink exposes a "fullscreen" property (d3d12videosink '
+                             'does; autovideosink does not). Alt+Enter toggles it at runtime.')
     parser.add_argument('--display-width', type=int, default=1920, metavar='W',
                         help='Preview window width in px (default: 1920)')
     parser.add_argument('--display-height', type=int, default=1080, metavar='H',
@@ -509,6 +514,13 @@ Examples:
             preview_leaky.set_property("max-size-buffers", 2)
         if preview_sink is not None:
             preview_sink.set_property("sync", False)
+            # Borderless fullscreen when the sink supports it. d3d12videosink
+            # takes plain "fullscreen"/"fullscreen-on-alt-enter" booleans;
+            # autovideosink has neither, so guard on the property.
+            if args.fullscreen and preview_sink.find_property("fullscreen"):
+                preview_sink.set_property("fullscreen", True)
+                if preview_sink.find_property("fullscreen-on-alt-enter"):
+                    preview_sink.set_property("fullscreen-on-alt-enter", True)
 
     failed_elements = [name for name, elem in elements.items() if elem is None]
 
@@ -633,7 +645,8 @@ Examples:
         print(f"Camera rotated 90 (videoflip method={flip_method}), then vertical linescan "
               f"with output-size={output_size} (aspect {args.aspect}), emit-every={emit_every}")
         if args.preview:
-            print(f"Preview branch: tee -> {args.preview_sink} "
+            fs_txt = " fullscreen" if args.fullscreen else ""
+            print(f"Preview branch: tee -> {args.preview_sink}{fs_txt} "
                   f"({args.display_width}x{args.display_height} @ {args.display_fps}fps)")
 
     # Connect rollover signal
@@ -737,6 +750,10 @@ Examples:
               f"x{args.framerate_step:g}/step, {args.framerate_min_dwell:g}s dwell (rung 4)")
     print(f"  linescan      : output-size={output_size}, emit-every={emit_every}"
           f"{' (preview off)' if not args.preview else ''}")
+    if args.preview:
+        print(f"  preview       : {args.preview_sink}, {args.display_width}x{args.display_height} "
+              f"@ {args.display_fps} fps"
+              f"{', borderless fullscreen (Alt+Enter toggles)' if args.fullscreen else ''}")
     print(f"  writing JPEGs : {output_dir}/")
     print(f"  csv log       : {log_file} (append, 1 row / {iv_update_interval} ms)")
     if args.mode == 'day':
